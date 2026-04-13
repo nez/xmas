@@ -18,7 +18,7 @@
     :scroll 0 :rows 24 :cols 80 :last-key nil}))
 
 (defn point [s] (:point (ed/cur s)))
-(defn text [s] (:text (ed/cur s)))
+(defn text [s] (str (:text (ed/cur s))))
 
 ;; --- Properties ---
 

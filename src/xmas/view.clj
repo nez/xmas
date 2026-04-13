@@ -71,7 +71,7 @@
     (loop [pos scroll row 0]
       (when (< row body-rows)
         (let [eol (text/line-end content pos)
-              line (subs content pos eol)
+              line (.toString (.subSequence ^CharSequence content (int pos) (int eol)))
               nxt (min (inc eol) (count content))]
           (write-row! row line :default cols hscroll)
           (recur nxt (inc row)))))

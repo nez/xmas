@@ -34,30 +34,30 @@
 (deftest edit-insert-at-start
   (let [b (buf/make "t" "hello" nil)
         b' (buf/edit b 0 0 "abc")]
-    (is (= "abchello" (:text b')))
+    (is (= "abchello" (str (:text b'))))
     (is (= 3 (:point b')))))
 
 (deftest edit-insert-at-end
   (let [b (assoc (buf/make "t" "hello" nil) :point 5)
         b' (buf/edit b 5 5 "!")]
-    (is (= "hello!" (:text b')))
+    (is (= "hello!" (str (:text b'))))
     (is (= 6 (:point b')))))
 
 (deftest edit-insert-at-middle
   (let [b (assoc (buf/make "t" "hello" nil) :point 2)
         b' (buf/edit b 2 2 "XY")]
-    (is (= "heXYllo" (:text b')))
+    (is (= "heXYllo" (str (:text b'))))
     (is (= 4 (:point b')))))
 
 (deftest edit-delete-range
   (let [b (buf/make "t" "hello" nil)
         b' (buf/edit b 1 3 "")]
-    (is (= "hlo" (:text b')))))
+    (is (= "hlo" (str (:text b'))))))
 
 (deftest edit-replace
   (let [b (buf/make "t" "hello" nil)
         b' (buf/edit b 1 4 "XY")]
-    (is (= "hXYo" (:text b')))))
+    (is (= "hXYo" (str (:text b'))))))
 
 (deftest edit-point-before-range
   (let [b (assoc (buf/make "t" "abcdef" nil) :point 1)
@@ -77,7 +77,7 @@
   (let [b (assoc (buf/make "t" "hello" nil) :point 2)
         b' (buf/edit b 2 2 "X")
         b'' (buf/undo b')]
-    (is (= "hello" (:text b'')))
+    (is (= "hello" (str (:text b''))))
     (is (= 2 (:point b'')))))
 
 (deftest multi-undo
@@ -86,8 +86,8 @@
         b2 (buf/edit b1 4 4 "e")
         u1 (buf/undo b2)
         u2 (buf/undo u1)]
-    (is (= "abcd" (:text u1)))
-    (is (= "abc" (:text u2)))))
+    (is (= "abcd" (str (:text u1))))
+    (is (= "abc" (str (:text u2))))))
 
 (deftest edit-records-undo-entry
   (let [b (buf/make "t" "hello" nil)

@@ -1,6 +1,7 @@
 (ns xmas.ed
   (:require [clojure.string :as str]
             [xmas.buf :as buf]
+            [xmas.gap :as gap]
             [xmas.term :as t]
             [xmas.text :as text]
             [xmas.view :as view]
@@ -8,8 +9,7 @@
             [nrepl.server :as nrepl]
             [xmas.web :as web]
             [xmas.dev :as dev])
-  (:import [java.nio.file Files StandardCopyOption]
-           [java.nio.file.attribute PosixFilePermissions])
+  (:import [java.nio.file Files StandardCopyOption])
   (:gen-class))
 
 ;; --- Editor state ---
@@ -81,15 +81,16 @@
         eol (text/line-end t p)
         end (if (= p eol) (min (inc eol) (count t)) eol)]
     (if (< p end)
-      (-> (edit s p end "") (kill-push (subs t p end)))
+      (-> (edit s p end "") (kill-push (.toString (.subSequence ^CharSequence t (int p) (int end)))))
       s)))
 
 (defn kill-region [s]
   (let [b (cur s) mark (:mark b)]
     (if-not mark s
-      (let [from (min mark (:point b)) to (max mark (:point b))]
+      (let [from (min mark (:point b)) to (max mark (:point b))
+            ^CharSequence t (:text b)]
         (-> (edit s from to "")
-            (kill-push (subs (:text b) from to))
+            (kill-push (.toString (.subSequence t (int from) (int to))))
             (update-cur #(assoc % :mark nil)))))))
 
 (defn yank [s]
@@ -155,7 +156,7 @@
            (catch Exception e
              (msg s (str "Error reading " path ": " (.getMessage e)))))
       (-> s (assoc-in [:bufs path] (buf/make name "" path)) (assoc :buf path)
-            (msg (str "(New file)"))))))
+            (msg "(New file)")))))
 
 (defn switch-buffer [s name]
   (if (get (:bufs s) name)
@@ -176,7 +177,7 @@
 
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
-    (let [input (:text (cur s))]
+    (let [input (str (:text (cur s)))]
       (-> s
           (assoc :buf prev-buf :mini nil)
           (update :mini-history #(if (and (seq input) (not= input (peek %)))
@@ -191,7 +192,7 @@
     (if (and (seq hist) (< idx (dec (count hist))))
       (let [entry (get hist (- (dec (count hist)) new-idx))]
         (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
+              (assoc-in [:bufs " *mini*" :text] (gap/of entry))
               (assoc-in [:bufs " *mini*" :point] (count entry))))
       s)))
 
@@ -202,10 +203,10 @@
             new-idx (dec idx)
             entry (get hist (- (dec (count hist)) new-idx))]
         (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
+              (assoc-in [:bufs " *mini*" :text] (gap/of entry))
               (assoc-in [:bufs " *mini*" :point] (count entry))))
       (-> s (assoc-in [:mini :history-idx] -1)
-            (assoc-in [:bufs " *mini*" :text] "")
+            (assoc-in [:bufs " *mini*" :text] (gap/of ""))
             (assoc-in [:bufs " *mini*" :point] 0)))))
 
 (defn- file-completer
@@ -237,10 +238,10 @@
 
 (defn- mini-tab-complete [s]
   (if-let [completer (get-in s [:mini :completer])]
-    (let [input (:text (cur s))
+    (let [input (str (:text (cur s)))
           {:keys [completed candidates]} (completer input)]
       (-> s
-          (assoc-in [:bufs " *mini*" :text] completed)
+          (assoc-in [:bufs " *mini*" :text] (gap/of completed))
           (assoc-in [:bufs " *mini*" :point] (count completed))
           (cond-> (seq candidates) (msg (str/join " " candidates)))))
     s))
