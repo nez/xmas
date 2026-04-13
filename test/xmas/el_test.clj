@@ -214,6 +214,26 @@
 (deftest error-unknown-string-escape
   (is (thrown? clojure.lang.ExceptionInfo (el/read-all "\"\\q\""))))
 
+(deftest error-eof-in-string-escape
+  (is (thrown? clojure.lang.ExceptionInfo (el/read-all "\"\\"))))
+
+(deftest error-eof-after-question-mark
+  (is (thrown? clojure.lang.ExceptionInfo (el/read-all "?"))))
+
+(deftest error-eof-after-quote
+  (is (thrown? clojure.lang.ExceptionInfo (el/read-all "'"))))
+
+(deftest error-eof-in-char-escape
+  (is (thrown? clojure.lang.ExceptionInfo (el/read-all "?\\"))))
+
+(deftest error-unknown-char-escape
+  (is (thrown? clojure.lang.ExceptionInfo (el/read-all "?\\q"))))
+
+;; --- Carriage return whitespace ---
+
+(deftest read-handles-carriage-return
+  (is (= [1 2] (el/read-all "1\r\n2"))))
+
 ;; --- Empty input ---
 
 (deftest read-all-empty
