@@ -1,0 +1,7 @@
+{:paths ["src"]
+ :deps {}
+ :aliases
+ {:run {:main-opts ["-m" "xmas.ed"]}
+  :uberjar {:replace-deps {com.github.seancorfield/depstar {:mvn/version "2.1.303"}}
+            :exec-fn hf.depstar/uberjar
+            :exec-args {:jar "target/xmas.jar" :aot true :main-class xmas.ed}}}}
