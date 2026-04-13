@@ -1,18 +1,19 @@
 (ns xmas.term
-  (:require [xmas.log :as log])
+  (:require [clojure.string :as str]
+            [xmas.log :as log])
   (:import [java.io InputStream]))
 
 ;; Raw terminal via stty + System.in/out. No JLine.
 
 (defn stty! [& args]
-  (let [cmd (into-array String ["sh" "-c" (str "stty " (clojure.string/join " " args) " </dev/tty")])
+  (let [cmd (into-array String ["sh" "-c" (str "stty " (str/join " " args) " </dev/tty")])
         p (.exec (Runtime/getRuntime) cmd)]
     (.waitFor p)))
 
 (defn terminal-size []
   (let [p (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" "stty size </dev/tty"]))
         out (slurp (.getInputStream p))
-        [r c] (clojure.string/split (clojure.string/trim out) #"\s+")]
+        [r c] (str/split (str/trim out) #"\s+")]
     [(Integer/parseInt r) (Integer/parseInt c)]))
 
 (defn enter-raw-mode! [] (stty! "raw" "-echo" "-icanon" "-isig"))
@@ -36,6 +37,25 @@
         (byte-available?) (let [b (.read stdin)] (log/log "byte-t:" b) b)
         (>= (System/currentTimeMillis) deadline) -1
         :else (do (Thread/sleep 1) (recur))))))
+
+(defn- read-utf8
+  "Decode a multi-byte UTF-8 sequence given the leading byte."
+  [^long b]
+  (let [[n mask] (cond (< b 0xC0) [0 0]
+                       (< b 0xE0) [1 0x1F]
+                       (< b 0xF0) [2 0x0F]
+                       :else      [3 0x07])]
+    (when (pos? n)
+      (let [cp (loop [i 0 cp (bit-and b mask)]
+                 (if (>= i n) cp
+                   (let [c (read-byte-raw)]
+                     (if (or (< c 0x80) (>= c 0xC0))
+                       -1
+                       (recur (inc i) (bit-or (bit-shift-left cp 6)
+                                              (bit-and c 0x3F)))))))]
+        (when (pos? cp)
+          (if (<= cp 0xFFFF) (char cp)
+            (String. (Character/toChars cp))))))))
 
 (defn- parse-csi []
   (loop [params ""]
@@ -71,7 +91,8 @@
               (= b 127) :backspace
               (< b 27) [:ctrl (char (+ b 96))]
               (< b 32) nil
-              :else    (char b))]
+              (< b 128) (char b)
+              :else    (read-utf8 b))]
     (log/log "key:" (pr-str key))
     key))
 
@@ -91,4 +112,4 @@
 
 (defn sg [{:keys [fg bg bold]}]
   (let [c (cond-> [0] bold (conj 1) fg (conj 38 5 fg) bg (conj 48 5 bg))]
-    (tw (str E (clojure.string/join ";" c) "m"))))
+    (tw (str E (str/join ";" c) "m"))))

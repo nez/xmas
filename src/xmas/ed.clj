@@ -1,180 +1,134 @@
 (ns xmas.ed
-  (:require [xmas.term :as t]
+  (:require [clojure.string :as str]
+            [xmas.buf :as buf]
+            [xmas.term :as t]
+            [xmas.text :as text]
             [xmas.view :as view]
-            [xmas.log :as log])
+            [xmas.log :as log]
+            [nrepl.server :as nrepl])
   (:gen-class))
 
-;; ============================================================================
-;; State
-;; ============================================================================
+;; --- Editor state ---
 
 (def editor (atom nil))
 
-(defn buf [s] (get (:bufs s) (:buf s)))
-(defn update-buf [s f] (update-in s [:bufs (:buf s)] f))
-(defn msg [s text] (assoc s :msg text))
+(defn cur [s] (get (:bufs s) (:buf s)))
+(defn update-cur [s f] (update-in s [:bufs (:buf s)] f))
+(defn msg [s message] (assoc s :msg message))
+(defn set-point [s f] (update-cur s #(buf/set-point % f)))
+(defn edit [s from to repl] (update-cur s #(buf/edit % from to repl)))
 
-(defn make-buf
-  ([name] (make-buf name "" nil))
-  ([name text file]
-   {:text text :point 0 :mark nil :file file
-    :modified false :mode :fundamental :undo []}))
+;; --- Commands (state → state) ---
 
-(defn set-point [s f]
-  (update-buf s (fn [b]
-    (assoc b :point (-> (f (:text b) (:point b))
-                        (max 0) (min (count (:text b))))))))
-
-;; ============================================================================
-;; One edit primitive: replace text[from..to] with repl
-;; ============================================================================
-
-(defn edit [s from to repl]
-  (update-buf s (fn [b]
-    (let [t (:text b)
-          old (subs t from to)
-          delta (- (count repl) (- to from))]
-      (-> b
-          (assoc :text (str (subs t 0 from) repl (subs t to)))
-          (assoc :modified true)
-          (update :undo conj {:from from :old old :new repl})
-          (update :point (fn [p]
-            (cond (< p from) p
-                  (<= p to)  (+ from (count repl))
-                  :else      (+ p delta)))))))))
-
-(defn edit-undo [s]
-  (if-let [{:keys [from old new]} (first (:undo (buf s)))]
-    (update-buf s (fn [b]
-      (let [t (:text b) to (+ from (count new))]
-        (-> b
-            (assoc :text (str (subs t 0 from) old (subs t to)))
-            (update :undo rest)
-            (assoc :point (+ from (count old)))))))
-    (msg s "No undo")))
-
-;; ============================================================================
-;; Commands (state → state)
-;; ============================================================================
-
-(defn forward-char [s]  (set-point s (fn [_ p] (inc p))))
-(defn backward-char [s] (set-point s (fn [_ p] (dec p))))
-(defn beginning-of-line [s] (set-point s view/line-start))
-(defn end-of-line [s]       (set-point s view/line-end))
+(defn forward-char [s]  (set-point s (fn [t p] (text/next-pos t p))))
+(defn backward-char [s] (set-point s (fn [t p] (text/prev-pos t p))))
+(defn beginning-of-line [s] (set-point s text/line-start))
+(defn end-of-line [s]       (set-point s text/line-end))
 (defn beginning-of-buffer [s] (set-point s (fn [_ _] 0)))
 (defn end-of-buffer [s]       (set-point s (fn [t _] (count t))))
 
 (defn next-line [s]
-  (update-buf s (fn [b]
-    (let [t (:text b) p (:point b)
-          col (- p (view/line-start t p))
-          nxt (min (inc (view/line-end t p)) (count t))]
-      (assoc b :point (if (>= nxt (count t)) (count t)
-                        (min (+ nxt col) (view/line-end t nxt))))))))
+  (set-point s (fn [t p]
+    (let [col (text/display-width t (text/line-start t p) p)
+          nxt (min (inc (text/line-end t p)) (count t))]
+      (if (>= nxt (count t)) (count t)
+        (text/pos-at-col t nxt (text/line-end t nxt) col))))))
 
 (defn previous-line [s]
-  (update-buf s (fn [b]
-    (let [t (:text b) p (:point b)
-          col (- p (view/line-start t p))
-          ls (view/line-start t p)]
-      (if (<= ls 0) (assoc b :point 0)
+  (set-point s (fn [t p]
+    (let [col (text/display-width t (text/line-start t p) p)
+          ls (text/line-start t p)]
+      (if (<= ls 0) 0
         (let [pe (dec ls)]
-          (assoc b :point (min (+ (view/line-start t pe) col) pe))))))))
+          (text/pos-at-col t (text/line-start t pe) pe col)))))))
 
-(defn- scan-word [t start dir]
-  (loop [p start in false]
-    (if (if (pos? dir) (>= p (count t)) (< p 0))
-      (if (pos? dir) (count t) 0)
-      (let [wc (Character/isLetterOrDigit (.charAt t (int p)))]
-        (if (and in (not wc))
-          (if (pos? dir) p (inc p))
-          (recur (+ p dir) wc))))))
-
-(defn forward-word [s]  (set-point s (fn [t p] (scan-word t p 1))))
-(defn backward-word [s] (set-point s (fn [t p] (scan-word t (dec p) -1))))
+(defn forward-word [s]  (set-point s text/word-forward))
+(defn backward-word [s] (set-point s text/word-backward))
 
 (defn self-insert [s]
-  (let [k (:last-key s)]
-    (if (char? k) (edit s (:point (buf s)) (:point (buf s)) (str k)) s)))
+  (let [k (:last-key s) p (:point (cur s))]
+    (cond (char? k)   (edit s p p (str k))
+          (string? k) (edit s p p k)
+          :else s)))
 
-(defn insert-newline [s] (edit s (:point (buf s)) (:point (buf s)) "\n"))
+(defn insert-newline [s] (let [p (:point (cur s))] (edit s p p "\n")))
 
 (defn delete-char [s]
-  (let [p (:point (buf s))]
-    (if (< p (count (:text (buf s)))) (edit s p (inc p) "") s)))
+  (let [b (cur s) p (:point b) t (:text b)]
+    (if (< p (count t)) (edit s p (text/next-pos t p) "") s)))
 
 (defn delete-backward-char [s]
-  (let [p (:point (buf s))]
-    (if (> p 0) (edit s (dec p) p "") s)))
+  (let [b (cur s) p (:point b) t (:text b)]
+    (if (> p 0) (edit s (text/prev-pos t p) p "") s)))
 
 (defn kill-line [s]
-  (let [b (buf s) p (:point b) t (:text b)
-        eol (view/line-end t p)
+  (let [b (cur s) p (:point b) t (:text b)
+        eol (text/line-end t p)
         end (if (= p eol) (min (inc eol) (count t)) eol)]
     (if (< p end)
       (-> (edit s p end "") (update :kill conj (subs t p end)))
       s)))
 
 (defn kill-region [s]
-  (let [b (buf s) mark (:mark b)]
+  (let [b (cur s) mark (:mark b)]
     (if-not mark s
       (let [from (min mark (:point b)) to (max mark (:point b))]
         (-> (edit s from to "")
             (update :kill conj (subs (:text b) from to))
-            (update-buf #(assoc % :mark nil)))))))
+            (update-cur #(assoc % :mark nil)))))))
 
 (defn yank [s]
   (if (seq (:kill s))
-    (let [p (:point (buf s))] (edit s p p (peek (:kill s))))
+    (let [p (:point (cur s))] (edit s p p (peek (:kill s))))
     s))
 
-(defn set-mark [s] (update-buf s #(assoc % :mark (:point %))))
-(defn undo [s] (edit-undo s))
+(defn set-mark [s] (update-cur s #(assoc % :mark (:point %))))
+
+(defn undo [s]
+  (if (seq (:undo (cur s)))
+    (update-cur s buf/undo)
+    (msg s "No undo")))
+
 (defn keyboard-quit [s]
   (if (:mini s)
-    ;; abort minibuffer — restore previous buffer
     (-> s (assoc :buf (:prev-buf (:mini s)) :mini nil) (msg "Quit"))
-    (-> s (update-buf #(assoc % :mark nil)) (msg "Quit"))))
+    (-> s (update-cur #(assoc % :mark nil)) (msg "Quit"))))
 
 (defn save-buffer [s]
-  (let [b (buf s)]
+  (let [b (cur s)]
     (if-let [f (:file b)]
       (do (spit f (:text b))
-          (-> s (update-buf #(assoc % :modified false)) (msg (str "Wrote " f))))
+          (-> s (update-cur #(assoc % :modified false)) (msg (str "Wrote " f))))
       (msg s "No file"))))
 
 (defn find-file [s filename]
-  (let [text (try (slurp filename) (catch Exception _ ""))
-        name (or (last (clojure.string/split filename #"/")) filename)]
-    (-> s (assoc-in [:bufs name] (make-buf name text filename)) (assoc :buf name))))
+  (let [content (try (slurp filename) (catch Exception _ ""))
+        name (or (last (str/split filename #"/")) filename)]
+    (-> s (assoc-in [:bufs name] (buf/make name content filename)) (assoc :buf name))))
 
 (defn switch-buffer [s name]
   (if (get (:bufs s) name)
     (assoc s :buf name)
-    (-> s (assoc-in [:bufs name] (make-buf name)) (assoc :buf name))))
+    (-> s (assoc-in [:bufs name] (buf/make name)) (assoc :buf name))))
 
-;; ============================================================================
-;; Minibuffer — activates a real buffer, normal commands just work
-;; ============================================================================
+;; --- Minibuffer ---
 
 (defn mini-start [s prompt on-done]
   (let [mb " *mini*"]
     (-> s
-        (assoc-in [:bufs mb] (make-buf mb))
+        (assoc-in [:bufs mb] (buf/make mb))
         (assoc :mini {:prompt prompt :on-done on-done :prev-buf (:buf s)})
         (assoc :buf mb))))
 
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
-    (let [input (:text (buf s))]
+    (let [input (:text (cur s))]
       (-> s
           (assoc :buf prev-buf :mini nil)
           (on-done input)))
     s))
 
-;; ============================================================================
-;; Bindings — nested maps = prefixes, fns = commands
-;; ============================================================================
+;; --- Bindings ---
 
 (def bindings
   {[:ctrl \f] forward-char,   [:ctrl \b] backward-char
@@ -196,24 +150,21 @@
 (defn handle-key [s key]
   (let [s (assoc s :last-key key)]
     (cond
-      ;; in minibuffer: RET accepts, C-g quits (handled above), rest are normal cmds
       (and (:mini s) (= key :return))
       (mini-accept s)
 
-      ;; normal dispatch
       :else
-      (let [b (get bindings key)]
+      (let [binding (get bindings key)]
         (cond
-          (map? b)    (let [k2 (t/read-key) c (get b k2)]
-                        (if c (let [r (c s)] (if (= r :exit) :exit r))
-                          (msg s (str "C-x " k2 " undefined"))))
-          (fn? b)     (b s)
-          (char? key) (if (>= (int key) 32) (self-insert s) s)
-          :else       (msg s (str key " undefined")))))))
+          (map? binding) (let [k2 (t/read-key) c (get binding k2)]
+                           (if c (let [r (c s)] (if (= r :exit) :exit r))
+                             (msg s (str "C-x " k2 " undefined"))))
+          (fn? binding)  (binding s)
+          (char? key)    (if (>= (int key) 32) (self-insert s) s)
+          (string? key)  (self-insert s)
+          :else          (msg s (str key " undefined")))))))
 
-;; ============================================================================
-;; Loop + main
-;; ============================================================================
+;; --- Main ---
 
 (defn command-loop []
   (loop []
@@ -226,14 +177,14 @@
             (reset! editor r)
             (recur)))))))
 
-(defn -main [& args]
+(defn -main [& _args]
   (log/init!) (log/log "xmas starting")
   (try
     (t/enter-raw-mode!) (t/cls)
     (let [[rows cols] (t/terminal-size)]
       (reset! editor
         {:buf "*scratch*"
-         :bufs {"*scratch*" (make-buf "*scratch*"
+         :bufs {"*scratch*" (buf/make "*scratch*"
                   ";; xmas\n;; C-f/b/n/p move, C-x C-f open, C-x C-c quit\n\n" nil)}
          :kill [] :msg nil :mini nil
          :scroll 0 :rows rows :cols cols :last-key nil})
@@ -241,7 +192,15 @@
                      (when (.exists (java.io.File. p)) p))]
         (try (load-file f)
              (catch Exception e (swap! editor msg (str "Init: " (.getMessage e))))))
-      (command-loop))
+      ;; Redirect stdout/stderr so nREPL output doesn't corrupt the terminal
+      (let [null-out (java.io.PrintStream. (java.io.OutputStream/nullOutputStream))]
+        (System/setOut null-out)
+        (System/setErr null-out))
+      (let [srv (nrepl/start-server :port 7888)]
+        (log/log "nrepl on port 7888")
+        (spit ".nrepl-port" "7888")
+        (try (command-loop)
+          (finally (nrepl/stop-server srv)))))
     (finally
       (log/log "xmas exiting") (log/close!)
       (t/reset-sg) (t/cls) (t/move 0 0) (t/show-cur) (t/flush!)
