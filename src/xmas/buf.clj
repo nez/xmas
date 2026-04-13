@@ -37,7 +37,7 @@
       (-> b
           (assoc :text (gap/edit (:text b) from to old))
           (update :undo pop)
-          (update :redo #(cap (conj % {:from from :old new :new old})))
+          (update :redo #(cap (conj % {:from from :old old :new new})))
           (assoc :point (+ from (count old)))))
     b))
 
@@ -47,6 +47,6 @@
       (-> b
           (assoc :text (gap/edit (:text b) from to new))
           (update :redo pop)
-          (update :undo #(cap (conj % {:from from :old old :new new})))
+          (update :undo #(cap (conj % {:from from :old new :new old})))
           (assoc :point (+ from (count new)))))
     b))

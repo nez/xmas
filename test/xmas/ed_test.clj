@@ -276,3 +276,207 @@
         s' (ed/handle-key s :return)]
     (is @accepted)
     (is (nil? (:mini s')))))
+
+;; --- Redo ---
+
+(deftest redo-after-undo
+  (let [s (make-state "abc" 3)
+        edited (-> s (ed/handle-key \d))       ;; "abcd", point=4
+        undone (ed/undo edited)                ;; "abc", point=3
+        redone (ed/redo undone)]               ;; "abcd", point=4
+    (is (= "abcd" (text redone)))
+    (is (= 4 (point redone)))))
+
+(deftest redo-with-nothing
+  (let [s' (ed/redo (make-state "abc" 0))]
+    (is (= "No redo" (:msg s')))))
+
+;; --- Goto line ---
+
+(deftest goto-line-basic
+  (let [s' (ed/goto-line (make-state "aaa\nbbb\nccc" 0) "2")]
+    (is (= 4 (point s')))))
+
+(deftest goto-line-first
+  (let [s' (ed/goto-line (make-state "aaa\nbbb" 5) "1")]
+    (is (= 0 (point s')))))
+
+(deftest goto-line-past-end
+  (let [s' (ed/goto-line (make-state "aaa\nbbb" 0) "99")]
+    (is (= 7 (point s')))))
+
+(deftest goto-line-not-a-number
+  (let [s' (ed/goto-line (make-state "abc" 0) "xyz")]
+    (is (= "Not a number" (:msg s')))))
+
+;; --- Scroll ---
+
+(deftest scroll-down-moves-by-page
+  (let [lines (apply str (repeat 30 "line\n"))
+        s (make-state lines 0)
+        s' (ed/scroll-down s)]
+    ;; rows=24, body=22, should move 22 lines down
+    (is (> (point s') 0))
+    (is (> (point s') (point s)))))
+
+(deftest scroll-up-at-top-stays
+  (let [s' (ed/scroll-up (make-state "abc\ndef\nghi" 0))]
+    (is (= 0 (point s')))))
+
+(deftest scroll-down-then-up-roundtrip
+  (let [lines (apply str (repeat 60 "line\n"))
+        s (make-state lines 0)
+        down (ed/scroll-down s)
+        up (ed/scroll-up down)]
+    ;; Should return to start
+    (is (= 0 (point up)))))
+
+;; --- Incremental search ---
+
+(deftest isearch-forward-find
+  (let [s (make-state "hello world" 0)
+        s1 (ed/handle-key s [:ctrl \s])     ;; start isearch
+        s2 (ed/handle-key s1 \w)            ;; type 'w'
+        s3 (ed/handle-key s2 \o)            ;; type 'o'
+        s4 (ed/handle-key s3 :return)]      ;; accept
+    (is (some? (:isearch s1)))
+    (is (= 6 (point s4)))                   ;; "wo" found at 6
+    (is (nil? (:isearch s4)))))
+
+(deftest isearch-backward-find
+  (let [s (make-state "abc def abc" 11)
+        s1 (ed/handle-key s [:ctrl \r])     ;; start backward isearch
+        s2 (ed/handle-key s1 \a)            ;; type 'a', finds at 8
+        s3 (ed/handle-key s2 :return)]      ;; accept
+    (is (= 8 (point s3)))))
+
+(deftest isearch-cancel-restores-point
+  (let [s (make-state "hello world" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 \w)
+        s3 (ed/handle-key s2 [:ctrl \g])]   ;; cancel
+    (is (= 0 (point s3)))                   ;; restored to original
+    (is (= "Quit" (:msg s3)))
+    (is (nil? (:isearch s3)))))
+
+(deftest isearch-not-found-shows-failing
+  (let [s (make-state "hello" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 \z)]
+    (is (clojure.string/starts-with? (:msg s2) "Failing I-search"))))
+
+(deftest isearch-backspace-shortens-pattern
+  (let [s (make-state "hello world" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 \w)
+        s3 (ed/handle-key s2 \x)            ;; "wx" — not found
+        s4 (ed/handle-key s3 :backspace)]   ;; back to "w"
+    ;; After backspace, pattern is "w" which IS found
+    (is (= "w" (get-in s4 [:isearch :pattern])))))
+
+(deftest isearch-backspace-empty-cancels
+  (let [s (make-state "hello" 3)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 :backspace)]   ;; empty pattern → cancel
+    (is (= 3 (point s2)))
+    (is (nil? (:isearch s2)))))
+
+(deftest isearch-next-forward
+  (let [s (make-state "abc abc abc" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 \a)            ;; find 'a' at 4 (searches from inc(0)=1)
+        s3 (ed/handle-key s2 [:ctrl \s])]   ;; next → finds 'a' at 8
+    (is (= 8 (point s3)))))
+
+(deftest isearch-non-search-key-accepts-and-dispatches
+  (let [s (make-state "hello world" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 \w)            ;; find "w" at 6
+        s3 (ed/handle-key s2 [:ctrl \f])]   ;; accept + forward-char
+    (is (nil? (:isearch s3)))
+    (is (= 7 (point s3)))))                 ;; 6 + forward = 7
+
+;; --- Prefix keys ---
+
+(deftest handle-key-prefix-then-command
+  ;; C-x C-s requires a pending prefix
+  (let [f (java.io.File/createTempFile "xmas-test" ".txt")]
+    (try
+      (let [s (-> (make-state "data" 0)
+                  (assoc-in [:bufs "*test*" :file] (.getAbsolutePath f)))
+            s' (-> s (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \s]))]
+        (is (= "data" (slurp f)))
+        (is (clojure.string/starts-with? (:msg s') "Wrote")))
+      (finally (.delete f)))))
+
+(deftest handle-key-prefix-undefined
+  (let [s' (-> (make-state "abc" 0)
+               (ed/handle-key [:ctrl \x])
+               (ed/handle-key \z))]
+    (is (clojure.string/starts-with? (:msg s') "prefix"))))
+
+;; --- Exit ---
+
+(deftest exit-no-modified-buffers
+  (let [s' (-> (make-state "abc" 0)
+               (ed/handle-key [:ctrl \x])
+               (ed/handle-key [:ctrl \c]))]
+    (is (:exit s'))))
+
+(deftest exit-modified-requires-confirmation
+  (let [s (-> (make-state "abc" 0) (ed/edit 0 0 "x"))
+        s' (-> s (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \c]))]
+    (is (not (:exit s')))
+    (is (clojure.string/starts-with? (:msg s') "Modified"))))
+
+;; --- Minibuffer history ---
+
+(deftest mini-history-prev-next
+  (let [s (-> (make-state "abc" 0) (assoc :mini-history ["first" "second"]))
+        ;; Open mini, navigate history
+        s1 (ed/mini-start s "Test: " (fn [s _] s))
+        s2 (ed/handle-key s1 [:meta \p])        ;; → "second" (most recent)
+        s3 (ed/handle-key s2 [:meta \p])        ;; → "first"
+        s4 (ed/handle-key s3 [:meta \n])        ;; → back to "second"
+        s5 (ed/handle-key s4 [:meta \n])]       ;; → back to empty
+    (is (= "second" (str (get-in s2 [:bufs " *mini*" :text]))))
+    (is (= "first" (str (get-in s3 [:bufs " *mini*" :text]))))
+    (is (= "second" (str (get-in s4 [:bufs " *mini*" :text]))))
+    (is (= "" (str (get-in s5 [:bufs " *mini*" :text]))))))
+
+(deftest mini-accept-records-history
+  (let [result (atom nil)
+        s (make-state "abc" 0)
+        s1 (ed/mini-start s "Test: " (fn [s input] (reset! result input) s))
+        ;; Type "foo" into minibuffer
+        s2 (-> s1 (ed/handle-key \f) (ed/handle-key \o) (ed/handle-key \o))
+        s3 (ed/handle-key s2 :return)]
+    (is (= "foo" @result))
+    (is (= ["foo"] (:mini-history s3)))))
+
+;; --- CRLF normalization ---
+
+(deftest find-file-crlf-normalized
+  (let [f (java.io.File/createTempFile "xmas-crlf" ".txt")]
+    (try
+      ;; Write CRLF content
+      (let [os (java.io.FileOutputStream. f)]
+        (.write os (.getBytes "line1\r\nline2\r\n"))
+        (.close os))
+      (let [s' (ed/find-file (make-state "" 0) (.getAbsolutePath f))]
+        (is (= "line1\nline2\n" (text s')))
+        (is (= :crlf (:line-ending (ed/cur s')))))
+      (finally (.delete f)))))
+
+;; --- Non-printable key ignored ---
+
+(deftest handle-key-control-char-below-space
+  (let [s' (ed/handle-key (make-state "abc" 0) (char 1))]
+    ;; Ctrl-A is bound to beginning-of-line, dispatches normally
+    (is (= 0 (point s')))))
+
+(deftest handle-key-low-char-unbound
+  ;; char 2 = Ctrl-B = backward-char, but char 0 is not printable and < 32
+  (let [s' (ed/handle-key (make-state "abc" 1) (char 0))]
+    ;; char 0 is < 32 and not printable → no self-insert
+    (is (= "abc" (text s')))))

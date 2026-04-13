@@ -170,3 +170,56 @@
 
 (deftest word-backward-empty
   (is (= 0 (text/word-backward "" 0))))
+
+;; --- search-forward ---
+
+(deftest search-forward-basic
+  (is (= 6 (text/search-forward "hello world" "world" 0))))
+
+(deftest search-forward-at-start
+  (is (= 0 (text/search-forward "hello world" "hello" 0))))
+
+(deftest search-forward-from-middle
+  (is (= 6 (text/search-forward "hello world" "world" 3))))
+
+(deftest search-forward-not-found
+  (is (nil? (text/search-forward "hello world" "xyz" 0))))
+
+(deftest search-forward-empty-pattern
+  (is (nil? (text/search-forward "hello" "" 0))))
+
+(deftest search-forward-past-match
+  (is (nil? (text/search-forward "hello world" "hello" 1))))
+
+(deftest search-forward-single-char
+  (is (= 4 (text/search-forward "abcde" "e" 0))))
+
+(deftest search-forward-repeated
+  ;; finds first occurrence at or after from
+  (is (= 0 (text/search-forward "abcabc" "abc" 0)))
+  (is (= 3 (text/search-forward "abcabc" "abc" 1))))
+
+;; --- search-backward ---
+
+(deftest search-backward-basic
+  (is (= 6 (text/search-backward "hello world" "world" 11))))
+
+(deftest search-backward-at-start
+  (is (= 0 (text/search-backward "hello world" "hello" 11))))
+
+(deftest search-backward-from-middle
+  (is (= 0 (text/search-backward "hello world" "hello" 6))))
+
+(deftest search-backward-not-found
+  (is (nil? (text/search-backward "hello world" "xyz" 11))))
+
+(deftest search-backward-empty-pattern
+  (is (nil? (text/search-backward "hello" "" 5))))
+
+(deftest search-backward-before-match
+  ;; "world" starts at 6, searching before pos 6 shouldn't find it
+  (is (nil? (text/search-backward "hello world" "world" 6))))
+
+(deftest search-backward-repeated
+  (is (= 3 (text/search-backward "abcabc" "abc" 6)))
+  (is (= 0 (text/search-backward "abcabc" "abc" 3))))
