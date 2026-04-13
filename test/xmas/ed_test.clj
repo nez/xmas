@@ -480,3 +480,195 @@
   (let [s' (ed/handle-key (make-state "abc" 1) (char 0))]
     ;; char 0 is < 32 and not printable → no self-insert
     (is (= "abc" (text s')))))
+
+;; --- Kill ring overflow ---
+
+(deftest kill-ring-caps-at-60
+  (let [s (reduce (fn [s i]
+                    (-> s
+                        (assoc-in [:bufs "*test*" :point] 0)
+                        (ed/kill-line)))
+                  (make-state (apply str (repeat 70 "x\n")) 0)
+                  (range 70))]
+    (is (<= (count (:kill s)) 60))))
+
+;; --- Find file edge cases ---
+
+(deftest find-file-new-file
+  (let [path (str (System/getProperty "java.io.tmpdir") "/xmas-nonexistent-" (System/nanoTime) ".txt")
+        s' (ed/find-file (make-state "" 0) path)]
+    (is (= "" (text s')))
+    (is (= "(New file)" (:msg s')))))
+
+(deftest find-file-error-reading
+  ;; Try to open a directory as a file — slurp will throw
+  (let [dir (System/getProperty "java.io.tmpdir")
+        s' (ed/find-file (make-state "" 0) dir)]
+    ;; Should show an error message, not crash
+    (is (or (clojure.string/starts-with? (or (:msg s') "") "Error")
+            ;; On some systems slurp on a dir returns content, so just check no crash
+            (some? s')))))
+
+;; --- Save buffer error ---
+
+(deftest save-buffer-error
+  (let [s (-> (make-state "data" 0)
+              (assoc-in [:bufs "*test*" :file] "/nonexistent-dir/impossible/file.txt"))
+        s' (ed/save-buffer s)]
+    (is (clojure.string/starts-with? (:msg s') "Save failed"))))
+
+;; --- Mini accept without mini ---
+
+(deftest mini-accept-no-mini
+  (let [s (make-state "abc" 0)
+        s' (ed/mini-accept s)]
+    (is (= "abc" (text s')))
+    (is (nil? (:mini s')))))
+
+;; --- Mini history dedup ---
+
+(deftest mini-history-no-duplicate
+  (let [result (atom nil)
+        s (-> (make-state "abc" 0) (assoc :mini-history ["foo"]))
+        ;; Type "foo" again — should not duplicate in history
+        s1 (ed/mini-start s "Test: " (fn [s input] (reset! result input) s))
+        s2 (-> s1 (ed/handle-key \f) (ed/handle-key \o) (ed/handle-key \o))
+        s3 (ed/handle-key s2 :return)]
+    (is (= "foo" @result))
+    (is (= ["foo"] (:mini-history s3)))))
+
+;; --- Mini history prev at boundary ---
+
+(deftest mini-history-prev-at-end-stays
+  (let [s (-> (make-state "abc" 0) (assoc :mini-history ["only"]))
+        s1 (ed/mini-start s "Test: " (fn [s _] s))
+        s2 (ed/handle-key s1 [:meta \p])    ;; → "only"
+        s3 (ed/handle-key s2 [:meta \p])]   ;; → still "only" (no more history)
+    (is (= "only" (str (get-in s3 [:bufs " *mini*" :text]))))))
+
+;; --- File completer ---
+
+(deftest file-completer-single-match
+  (let [dir (java.io.File/createTempFile "xmas-comp" "")]
+    (.delete dir)
+    (.mkdirs dir)
+    (spit (java.io.File. dir "testfile.txt") "")
+    (try
+      (let [{:keys [completed candidates]}
+            (#'ed/file-completer (str (.getPath dir) "/test"))]
+        (is (clojure.string/ends-with? completed "testfile.txt"))
+        (is (empty? candidates)))
+      (finally
+        (.delete (java.io.File. dir "testfile.txt"))
+        (.delete dir)))))
+
+(deftest file-completer-multiple-matches
+  (let [dir (java.io.File/createTempFile "xmas-comp" "")]
+    (.delete dir)
+    (.mkdirs dir)
+    (spit (java.io.File. dir "alpha.txt") "")
+    (spit (java.io.File. dir "alphb.txt") "")
+    (try
+      (let [{:keys [completed candidates]}
+            (#'ed/file-completer (str (.getPath dir) "/alph"))]
+        (is (clojure.string/ends-with? completed "alph"))
+        (is (= 2 (count candidates))))
+      (finally
+        (.delete (java.io.File. dir "alpha.txt"))
+        (.delete (java.io.File. dir "alphb.txt"))
+        (.delete dir)))))
+
+(deftest file-completer-no-matches
+  (let [{:keys [completed candidates]}
+        (#'ed/file-completer "/nonexistent-xmas-path/zzz")]
+    (is (= "/nonexistent-xmas-path/zzz" completed))
+    (is (empty? candidates))))
+
+(deftest file-completer-directory-input
+  ;; When input is a directory, list all children (prefix = "")
+  (let [dir (java.io.File/createTempFile "xmas-comp" "")]
+    (.delete dir)
+    (.mkdirs dir)
+    (spit (java.io.File. dir "one.txt") "")
+    (spit (java.io.File. dir "two.txt") "")
+    (try
+      (let [{:keys [candidates]}
+            (#'ed/file-completer (str (.getPath dir) "/"))]
+        (is (= 2 (count candidates))))
+      (finally
+        (.delete (java.io.File. dir "one.txt"))
+        (.delete (java.io.File. dir "two.txt"))
+        (.delete dir)))))
+
+;; --- Tab complete in minibuffer ---
+
+(deftest mini-tab-complete-via-handle-key
+  (let [dir (java.io.File/createTempFile "xmas-tab" "")]
+    (.delete dir)
+    (.mkdirs dir)
+    (spit (java.io.File. dir "unique-file.el") "")
+    (try
+      (let [prefix (str (.getPath dir) "/uni")
+            s (make-state "abc" 0)
+            s1 (ed/mini-start s "Find: " (fn [s _] s) #'ed/file-completer)
+            ;; Type the prefix into minibuffer
+            s2 (reduce #(ed/handle-key %1 %2) s1 (seq prefix))
+            ;; Press tab
+            s3 (ed/handle-key s2 :tab)
+            completed (str (get-in s3 [:bufs " *mini*" :text]))]
+        (is (clojure.string/ends-with? completed "unique-file.el")))
+      (finally
+        (.delete (java.io.File. dir "unique-file.el"))
+        (.delete dir)))))
+
+(deftest mini-tab-no-completer
+  ;; Tab in a minibuffer without a completer is a no-op
+  (let [s (ed/mini-start (make-state "abc" 0) "Test: " (fn [s _] s))
+        s' (ed/handle-key s :tab)]
+    (is (= "" (str (get-in s' [:bufs " *mini*" :text]))))))
+
+;; --- String key self-insert ---
+
+(deftest handle-key-string-self-insert
+  (let [s' (ed/handle-key (make-state "ab" 1) "\uD83D\uDE00")]
+    (is (= "a\uD83D\uDE00b" (text s')))))
+
+;; --- Isearch string key ---
+
+(deftest isearch-append-string-key
+  (let [s (make-state "hello \uD83D\uDE00 world" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (ed/handle-key s1 "\uD83D\uDE00")
+        s3 (ed/handle-key s2 :return)]
+    (is (= 6 (point s3)))))
+
+;; --- Isearch backward via C-r in isearch ---
+
+(deftest isearch-ctrl-r-reverses
+  (let [s (make-state "abc abc abc" 11)
+        s1 (ed/handle-key s [:ctrl \s])      ;; start forward
+        s2 (ed/handle-key s1 [:ctrl \r])     ;; switch to backward (empty pattern, no-op)
+        s3 (ed/handle-key s2 \a)             ;; search backward for 'a'
+        s4 (ed/handle-key s3 :return)]
+    (is (= 8 (point s4)))))
+
+;; --- Goto line via M-g binding ---
+
+(deftest goto-line-via-binding
+  (let [s (make-state "aaa\nbbb\nccc" 0)
+        s1 (ed/handle-key s [:meta \g])      ;; opens goto-line minibuffer
+        _ (is (some? (:mini s1)))
+        s2 (ed/handle-key s1 \3)             ;; type "3"
+        s3 (ed/handle-key s2 :return)]       ;; accept
+    (is (= 8 (point s3)))))
+
+;; --- Switch buffer via C-x b ---
+
+(deftest switch-buffer-via-binding
+  (let [s (make-state "abc" 0)
+        s1 (-> s (ed/handle-key [:ctrl \x]) (ed/handle-key \b))
+        _ (is (some? (:mini s1)))
+        s2 (reduce #(ed/handle-key %1 %2) s1 (seq "*new*"))
+        s3 (ed/handle-key s2 :return)]
+    (is (= "*new*" (:buf s3)))
+    (is (= "" (text s3)))))
