@@ -18,10 +18,12 @@
   (when-let [^FileWriter w @log-file]
     (let [ts (.format (LocalDateTime/now) fmt)
           msg (apply str (interpose " " args))]
-      (.write w (str ts " " msg "\n"))
-      (.flush w))))
+      (locking w
+        (.write w (str ts " " msg "\n"))
+        (.flush w)))))
 
 (defn close! []
   (when-let [^FileWriter w @log-file]
-    (.close w)
+    (locking w
+      (.close w))
     (reset! log-file nil)))

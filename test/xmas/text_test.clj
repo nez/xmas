@@ -1,0 +1,172 @@
+(ns xmas.text-test
+  (:require [clojure.test :refer [deftest is]]
+            [clojure.test.check.clojure-test :refer [defspec]]
+            [clojure.test.check.generators :as gen]
+            [clojure.test.check.properties :as prop]
+            [xmas.text :as text]
+            [xmas.spec :as spec]))
+
+;; --- Properties ---
+
+(defspec next-prev-roundtrip 200
+  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text {:max-tries 50})]
+    (let [bounds (butlast (spec/codepoint-boundaries t))]
+      (every? #(= % (text/prev-pos t (text/next-pos t %))) bounds))))
+
+(defspec prev-next-roundtrip 200
+  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)]
+    (let [bounds (rest (spec/codepoint-boundaries t))]
+      (every? #(= % (text/next-pos t (text/prev-pos t %))) bounds))))
+
+(defspec line-start-valid 200
+  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)]
+    (let [bounds (butlast (spec/codepoint-boundaries t))]
+      (every? (fn [p]
+        (let [ls (text/line-start t p)]
+          (or (zero? ls) (= \newline (.charAt ^String t (dec ls))))))
+        bounds))))
+
+(defspec line-end-valid 200
+  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)]
+    (let [bounds (butlast (spec/codepoint-boundaries t))]
+      (every? (fn [p]
+        (let [le (text/line-end t p)]
+          (or (= le (count t)) (= \newline (.charAt ^String t le)))))
+        bounds))))
+
+(defspec display-width-non-negative 200
+  (prop/for-all [t spec/gen-text]
+    (>= (text/display-width t 0 (count t)) 0)))
+
+(defspec pos-at-col-within-bounds 200
+  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)
+                 col (gen/choose 0 100)]
+    (let [result (text/pos-at-col t 0 (count t) col)]
+      (<= 0 result (count t)))))
+
+;; --- next-pos / prev-pos ---
+
+(deftest next-pos-ascii
+  (is (= 1 (text/next-pos "abc" 0)))
+  (is (= 2 (text/next-pos "abc" 1)))
+  (is (= 3 (text/next-pos "abc" 2))))
+
+(deftest next-pos-at-end
+  (is (= 3 (text/next-pos "abc" 3))))
+
+(deftest next-pos-cjk
+  (let [t "\u4F60\u597D"]
+    (is (= 1 (text/next-pos t 0)))
+    (is (= 2 (text/next-pos t 1)))))
+
+(deftest next-pos-emoji
+  (let [t "a\uD83D\uDE00b"]  ;; a😀b
+    (is (= 1 (text/next-pos t 0)))
+    (is (= 3 (text/next-pos t 1)))
+    (is (= 4 (text/next-pos t 3)))))
+
+(deftest prev-pos-emoji
+  (let [t "a\uD83D\uDE00b"]
+    (is (= 3 (text/prev-pos t 4)))
+    (is (= 1 (text/prev-pos t 3)))
+    (is (= 0 (text/prev-pos t 1)))))
+
+(deftest prev-pos-at-start
+  (is (= 0 (text/prev-pos "abc" 0))))
+
+(deftest next-prev-empty
+  (is (= 0 (text/next-pos "" 0)))
+  (is (= 0 (text/prev-pos "" 0))))
+
+;; --- line-start / line-end ---
+
+(deftest line-start-basic
+  (is (= 0 (text/line-start "abc" 0)))
+  (is (= 0 (text/line-start "abc" 2)))
+  (is (= 4 (text/line-start "abc\ndef" 4)))
+  (is (= 4 (text/line-start "abc\ndef" 6))))
+
+(deftest line-end-basic
+  (is (= 3 (text/line-end "abc\ndef" 0)))
+  (is (= 3 (text/line-end "abc\ndef" 2)))
+  (is (= 7 (text/line-end "abc\ndef" 4))))
+
+(deftest line-start-no-newline
+  (is (= 0 (text/line-start "abc" 1))))
+
+(deftest line-end-no-newline
+  (is (= 3 (text/line-end "abc" 0))))
+
+;; --- char-width ---
+
+(deftest char-width-ascii
+  (is (= 1 (text/char-width (int \a))))
+  (is (= 1 (text/char-width (int \space)))))
+
+(deftest char-width-cjk
+  (is (= 2 (text/char-width 0x4E00)))
+  (is (= 2 (text/char-width 0x9FFF))))
+
+(deftest char-width-combining
+  (is (= 0 (text/char-width 0x0300)))
+  (is (= 0 (text/char-width 0x036F))))
+
+(deftest char-width-fullwidth
+  (is (= 2 (text/char-width 0xFF01))))
+
+;; --- display-width ---
+
+(deftest display-width-ascii
+  (is (= 5 (text/display-width "hello" 0 5))))
+
+(deftest display-width-cjk
+  (let [t "\u4F60\u597D"]  ;; 你好
+    (is (= 4 (text/display-width t 0 2)))))
+
+(deftest display-width-mixed
+  (let [t "a\u4F60"]  ;; a你
+    (is (= 3 (text/display-width t 0 (count t))))))
+
+(deftest display-width-empty
+  (is (= 0 (text/display-width "" 0 0))))
+
+;; --- pos-at-col ---
+
+(deftest pos-at-col-ascii
+  (is (= 0 (text/pos-at-col "abc" 0 3 0)))
+  (is (= 1 (text/pos-at-col "abc" 0 3 1)))
+  (is (= 3 (text/pos-at-col "abc" 0 3 3))))
+
+(deftest pos-at-col-cjk-no-split
+  (let [t "\u4F60\u597D"]  ;; 你好, each 2 cols
+    (is (= 0 (text/pos-at-col t 0 2 0)))
+    (is (= 0 (text/pos-at-col t 0 2 1)))  ;; can't split wide char
+    (is (= 1 (text/pos-at-col t 0 2 2)))))
+
+(deftest pos-at-col-past-end
+  (is (= 3 (text/pos-at-col "abc" 0 3 10))))
+
+;; --- word-forward / word-backward ---
+
+(deftest word-forward-basic
+  (is (= 5 (text/word-forward "hello world" 0)))
+  (is (= 11 (text/word-forward "hello world" 6))))
+
+(deftest word-forward-at-end
+  (is (= 5 (text/word-forward "hello" 5))))
+
+(deftest word-forward-punctuation
+  (is (= 5 (text/word-forward "hello, world" 0))))
+
+(deftest word-backward-basic
+  (is (= 6 (text/word-backward "hello world" 11)))
+  (is (= 0 (text/word-backward "hello world" 5))))
+
+(deftest word-backward-at-start
+  (is (= 0 (text/word-backward "hello" 0))))
+
+(deftest word-forward-empty
+  (is (= 0 (text/word-forward "" 0))))
+
+(deftest word-backward-empty
+  (is (= 0 (text/word-backward "" 0))))

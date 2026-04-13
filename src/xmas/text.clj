@@ -15,8 +15,9 @@
 (defn line-start
   "Start of line containing pos."
   ^long [^String t ^long pos]
-  (let [i (.lastIndexOf t (int \newline) (int (max 0 (dec pos))))]
-    (if (neg? i) 0 (inc i))))
+  (if (<= pos 0) 0
+    (let [i (.lastIndexOf t (int \newline) (int (dec pos)))]
+      (if (neg? i) 0 (inc i)))))
 
 (defn line-end
   "End of line containing pos (position of newline, or end of text)."
@@ -78,3 +79,17 @@
             nw (+ w cw)]
         (if (> nw col) p
           (recur (+ p (Character/charCount cp)) nw))))))
+
+(defn search-forward
+  "Position of pattern in t at or after from, or nil."
+  [^String t ^String pattern ^long from]
+  (when (seq pattern)
+    (let [i (.indexOf t pattern (int from))]
+      (when-not (neg? i) i))))
+
+(defn search-backward
+  "Position of pattern in t before from, or nil."
+  [^String t ^String pattern ^long from]
+  (when (seq pattern)
+    (let [i (.lastIndexOf t pattern (int (max 0 (dec from))))]
+      (when-not (neg? i) i))))
