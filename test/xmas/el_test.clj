@@ -3,6 +3,7 @@
             [clojure.test.check.clojure-test :refer [defspec]]
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
+            [xmas.buf :as buf]
             [xmas.el :as el]))
 
 (defn r1 [s] (first (el/read-all s)))
@@ -265,3 +266,287 @@
                       (.replace "\"" "\\\""))
           input (str "\"" escaped "\"")]
       (= s (r1 input)))))
+
+;; ============================================================
+;; EVALUATOR TESTS
+;; ============================================================
+
+(defn make-editor
+  "Create a minimal editor state atom for eval tests."
+  ([] (make-editor ""))
+  ([text]
+   (atom {:buf "*test*"
+          :bufs {"*test*" (assoc (buf/make "*test*" text nil) :point 0)}
+          :kill [] :msg nil :mini nil :scroll 0 :rows 24 :cols 80})))
+
+(defn ev
+  "Eval elisp string against a fresh editor, return result."
+  ([s] (ev s (make-editor)))
+  ([s editor] (el/eval-string s editor)))
+
+(defn ev-text
+  "Eval elisp string, return buffer text."
+  ([s] (ev-text s ""))
+  ([s initial-text]
+   (let [ed (make-editor initial-text)]
+     (el/eval-string s ed)
+     (str (:text (get (:bufs @ed) (:buf @ed)))))))
+
+(defn ev-point
+  "Eval elisp string, return point position."
+  ([s] (ev-point s ""))
+  ([s initial-text]
+   (let [ed (make-editor initial-text)]
+     (el/eval-string s ed)
+     (:point (get (:bufs @ed) (:buf @ed))))))
+
+;; --- Self-evaluating ---
+
+(deftest eval-number
+  (is (= 42 (ev "42"))))
+
+(deftest eval-string
+  (is (= "hello" (ev "\"hello\""))))
+
+(deftest eval-nil
+  (is (nil? (ev "nil"))))
+
+(deftest eval-t
+  (is (true? (ev "t"))))
+
+;; --- Arithmetic ---
+
+(deftest eval-add
+  (is (= 7 (ev "(+ 3 4)"))))
+
+(deftest eval-sub
+  (is (= 5 (ev "(- 10 5)"))))
+
+(deftest eval-mul
+  (is (= 12 (ev "(* 3 4)"))))
+
+(deftest eval-div
+  (is (= 5 (ev "(/ 10 2)"))))
+
+(deftest eval-comparison
+  (is (true? (ev "(< 1 2)")))
+  (is (true? (ev "(> 3 2)")))
+  (is (true? (ev "(= 5 5)")))
+  (is (true? (ev "(<= 3 3)")))
+  (is (true? (ev "(>= 4 3)"))))
+
+;; --- Quote ---
+
+(deftest eval-quote
+  (is (= 'foo (ev "'foo")))
+  (is (= '(a b c) (ev "'(a b c)"))))
+
+;; --- Variables ---
+
+(deftest eval-setq
+  (is (= 42 (ev "(progn (setq x 42) x)"))))
+
+(deftest eval-setq-multiple
+  (is (= 20 (ev "(progn (setq x 10 y 20) y)"))))
+
+;; --- If ---
+
+(deftest eval-if-true
+  (is (= 1 (ev "(if t 1 2)"))))
+
+(deftest eval-if-false
+  (is (= 2 (ev "(if nil 1 2)"))))
+
+(deftest eval-if-no-else
+  (is (nil? (ev "(if nil 1)"))))
+
+;; --- Cond ---
+
+(deftest eval-cond
+  (is (= 2 (ev "(cond (nil 1) (t 2) (t 3))"))))
+
+(deftest eval-cond-no-match
+  (is (nil? (ev "(cond (nil 1))"))))
+
+;; --- Progn ---
+
+(deftest eval-progn
+  (is (= 3 (ev "(progn 1 2 3)"))))
+
+;; --- Let ---
+
+(deftest eval-let-basic
+  (is (= 30 (ev "(let ((x 10) (y 20)) (+ x y))"))))
+
+(deftest eval-let-restores
+  (is (= 99 (ev "(progn (setq x 99) (let ((x 1)) x) x)"))))
+
+;; --- Defun ---
+
+(deftest eval-defun-and-call
+  (is (= 25 (ev "(progn (defun square (x) (* x x)) (square 5))"))))
+
+(deftest eval-defun-multi-body
+  (is (= 3 (ev "(progn (defun f () 1 2 3) (f))"))))
+
+;; --- Lambda ---
+
+(deftest eval-lambda
+  ;; Lambda creates a callable value; in Lisp-2 it lives in the var namespace
+  (let [ed (make-editor)]
+    (el/eval-string "(setq f (lambda (x) (* x 2)))" ed)
+    (is (map? (el/eval-1 "f" ed)))))
+
+;; --- While ---
+
+(deftest eval-while
+  (is (= 10 (ev "(progn (setq i 0) (while (< i 10) (setq i (+ i 1))) i)"))))
+
+;; --- And / Or / Not ---
+
+(deftest eval-and
+  (is (= 3 (ev "(and 1 2 3)")))
+  (is (nil? (ev "(and 1 nil 3)"))))
+
+(deftest eval-or
+  (is (= 1 (ev "(or nil 1 2)")))
+  (is (nil? (ev "(or nil nil)"))))
+
+(deftest eval-not
+  (is (true? (ev "(not nil)")))
+  (is (not (ev "(not t)"))))
+
+;; --- List operations ---
+
+(deftest eval-cons
+  (is (= '(1 2 3) (ev "(cons 1 '(2 3))"))))
+
+(deftest eval-car-cdr
+  (is (= 1 (ev "(car '(1 2 3))")))
+  (is (= '(2 3) (ev "(cdr '(1 2 3))"))))
+
+(deftest eval-list
+  (is (= '(1 2 3) (ev "(list 1 2 3)"))))
+
+(deftest eval-length
+  (is (= 3 (ev "(length '(a b c))"))))
+
+(deftest eval-null
+  (is (true? (ev "(null nil)")))
+  (is (not (ev "(null '(1))"))))
+
+;; --- String operations ---
+
+(deftest eval-concat
+  (is (= "foobar" (ev "(concat \"foo\" \"bar\")"))))
+
+(deftest eval-substring
+  (is (= "ell" (ev "(substring \"hello\" 1 4)")))
+  (is (= "llo" (ev "(substring \"hello\" 2)"))))
+
+;; --- Predicates ---
+
+(deftest eval-numberp
+  (is (true? (ev "(numberp 42)")))
+  (is (not (ev "(numberp \"x\")"))))
+
+(deftest eval-stringp
+  (is (true? (ev "(stringp \"x\")")))
+  (is (not (ev "(stringp 42)"))))
+
+(deftest eval-symbolp
+  (is (true? (ev "(symbolp 'foo)")))
+  (is (not (ev "(symbolp 42)"))))
+
+(deftest eval-equal
+  (is (true? (ev "(equal 1 1)")))
+  (is (not (ev "(equal 1 2)"))))
+
+;; --- Buffer bridge ---
+
+(deftest eval-point
+  (is (= 0 (ev "(point)"))))
+
+(deftest eval-insert
+  (is (= "hello" (ev-text "(insert \"hello\")"))))
+
+(deftest eval-insert-multiple
+  (is (= "ab" (ev-text "(insert \"a\" \"b\")"))))
+
+(deftest eval-goto-char
+  (is (= 3 (ev-point "(goto-char 3)" "hello"))))
+
+(deftest eval-delete-region
+  (is (= "hlo" (ev-text "(delete-region 1 3)" "hello"))))
+
+(deftest eval-buffer-string
+  (is (= "hello" (ev "(buffer-string)" (make-editor "hello")))))
+
+(deftest eval-forward-backward-char
+  (is (= 2 (ev-point "(progn (forward-char) (forward-char) (point))" "hello")))
+  (let [ed (make-editor "hello")]
+    (swap! ed assoc-in [:bufs "*test*" :point] 3)
+    (el/eval-string "(backward-char)" ed)
+    (is (= 2 (:point (get (:bufs @ed) "*test*"))))))
+
+(deftest eval-beginning-end-of-line
+  (let [ed (make-editor "abc\ndef")]
+    (swap! ed assoc-in [:bufs "*test*" :point] 5)
+    (el/eval-string "(beginning-of-line)" ed)
+    (is (= 4 (:point (get (:bufs @ed) "*test*"))))
+    (el/eval-string "(end-of-line)" ed)
+    (is (= 7 (:point (get (:bufs @ed) "*test*"))))))
+
+(deftest eval-search-forward
+  (let [ed (make-editor "hello world")]
+    (el/eval-string "(search-forward \"world\")" ed)
+    (is (= 11 (:point (get (:bufs @ed) "*test*"))))))
+
+(deftest eval-message
+  (let [ed (make-editor "")]
+    (el/eval-string "(message \"hello %s\" \"world\")" ed)
+    (is (= "hello world" (:msg @ed)))))
+
+;; --- Defun + buffer manipulation ---
+
+(deftest eval-defun-inserts
+  (is (= "XYZhello"
+         (ev-text "(progn (defun prepend () (goto-char 0) (insert \"XYZ\")) (prepend))"
+                  "hello"))))
+
+(deftest eval-defun-kill-line
+  (is (= "\ndef"
+         (ev-text "(progn
+                     (defun my-kill-to-eol ()
+                       (let ((start (point)))
+                         (end-of-line)
+                         (delete-region start (point))))
+                     (my-kill-to-eol))"
+                  "abc\ndef"))))
+
+;; --- Key string parsing ---
+
+(deftest parse-key-ctrl
+  (is (= [[:ctrl \c]] (el/parse-key-string "\\C-c"))))
+
+(deftest parse-key-meta
+  (is (= [[:meta \x]] (el/parse-key-string "\\M-x"))))
+
+(deftest parse-key-sequence
+  (is (= [[:ctrl \c] \d] (el/parse-key-string "\\C-cd"))))
+
+(deftest parse-key-multi-ctrl
+  (is (= [[:ctrl \x] [:ctrl \s]] (el/parse-key-string "\\C-x\\C-s"))))
+
+(deftest parse-key-plain
+  (is (= [\a \b \c] (el/parse-key-string "abc"))))
+
+;; --- Global-set-key ---
+
+(deftest eval-global-set-key
+  (let [ed (make-editor "hello")]
+    (el/eval-string
+      "(progn (defun my-cmd () (insert \"!\")) (global-set-key \"\\\\C-ct\" 'my-cmd))"
+      ed)
+    ;; Verify a binding was registered
+    (is (some? (:el-bindings @ed)))))
