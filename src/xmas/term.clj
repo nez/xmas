@@ -120,8 +120,19 @@
 (def ^java.io.PrintStream real-out System/out)
 (def ^:dynamic *out-fn* (fn [^String s] (.print real-out s)))
 
-(defn tw [^String s] (*out-fn* s))
+(defn tw [s] (*out-fn* (str s)))
 (defn flush! [] (.flush real-out))
+
+(defmacro with-frame
+  "Batch all tw output into a single write+flush."
+  [& body]
+  `(let [sb# (StringBuilder. 4096)
+         outer# *out-fn*
+         result# (binding [*out-fn* (fn [s#] (.append sb# s#))]
+                   ~@body)]
+     (outer# (.toString sb#))
+     (.flush real-out)
+     result#))
 (defn move [r c] (tw (str E (inc r) ";" (inc c) "H")))
 (defn clreol [] (tw (str E "K")))
 (defn cls [] (tw (str E "2J" E "H")))

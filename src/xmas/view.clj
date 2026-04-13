@@ -64,54 +64,54 @@
         cursor-col (text/display-width content (gap/nth-line-start content point-line) point)
         hscroll (ensure-hvisible hscroll cursor-col cols)
         mini-row (dec rows)]
-    (t/hide-cur)
-    ;; text
-    (let [start-line (gap/line-of content scroll)
-          total-lines (gap/line-count content)]
-      (loop [ln start-line row 0]
-        (when (and (< row body-rows) (< ln total-lines))
-          (let [pos (gap/nth-line-start content ln)
-                eol (gap/nth-line-end content ln)
-                line (.toString (.subSequence ^CharSequence content (int pos) (int eol)))]
-            (write-row! row line :default cols hscroll)
-            (recur (inc ln) (inc row))))))
-    ;; mode line
-    (let [line (inc point-line)
-          col (inc cursor-col)
-          ml (format " %s %s   L%d C%d  (%s)"
-                     (if modified "**" "--") (or name display-buf)
-                     line col
-                     (clojure.core/name (or mode :fundamental)))
-          mw (text/display-width ml 0 (count ml))
-          padded (if (< mw cols)
-                   (str ml (apply str (repeat (- cols mw) \space)))
-                   (subs ml 0 (text/pos-at-col ml 0 (count ml) cols)))]
-      (write-row! body-rows padded :modeline cols 0))
-    ;; minibuffer / echo area
-    (t/move mini-row 0)
-    (cond
-      mini
-      (let [{:keys [prompt]} mini
-            mb (get bufs buf)
-            input (:text mb)
-            cursor (:point mb)]
-        (t/sg (:prompt faces)) (t/tw prompt)
-        (t/reset-sg) (t/tw input) (t/clreol)
-        (t/move mini-row (+ (count prompt) (text/display-width input 0 cursor))))
+    (t/with-frame
+      (t/hide-cur)
+      ;; text
+      (let [start-line (gap/line-of content scroll)
+            total-lines (gap/line-count content)]
+        (loop [ln start-line row 0]
+          (when (and (< row body-rows) (< ln total-lines))
+            (let [pos (gap/nth-line-start content ln)
+                  eol (gap/nth-line-end content ln)
+                  line (.toString (.subSequence ^CharSequence content (int pos) (int eol)))]
+              (write-row! row line :default cols hscroll)
+              (recur (inc ln) (inc row))))))
+      ;; mode line
+      (let [line (inc point-line)
+            col (inc cursor-col)
+            ml (format " %s %s   L%d C%d  (%s)"
+                       (if modified "**" "--") (or name display-buf)
+                       line col
+                       (clojure.core/name (or mode :fundamental)))
+            mw (text/display-width ml 0 (count ml))
+            padded (if (< mw cols)
+                     (str ml (apply str (repeat (- cols mw) \space)))
+                     (subs ml 0 (text/pos-at-col ml 0 (count ml) cols)))]
+        (write-row! body-rows padded :modeline cols 0))
+      ;; minibuffer / echo area
+      (t/move mini-row 0)
+      (cond
+        mini
+        (let [{:keys [prompt]} mini
+              mb (get bufs buf)
+              input (:text mb)
+              cursor (:point mb)]
+          (t/sg (:prompt faces)) (t/tw prompt)
+          (t/reset-sg) (t/tw input) (t/clreol)
+          (t/move mini-row (+ (count prompt) (text/display-width input 0 cursor))))
 
-      isearch
-      (let [prompt (str (if (= (:direction isearch) :forward) "I-search: " "I-search backward: ")
-                        (:pattern isearch))]
-        (t/sg (:prompt faces)) (t/tw prompt) (t/reset-sg) (t/clreol))
+        isearch
+        (let [prompt (str (if (= (:direction isearch) :forward) "I-search: " "I-search backward: ")
+                          (:pattern isearch))]
+          (t/sg (:prompt faces)) (t/tw prompt) (t/reset-sg) (t/clreol))
 
-      :else
-      (do (t/reset-sg) (t/tw (or msg "")) (t/clreol)))
-    ;; cursor
-    (when-not mini
-      (let [[cr _] (cursor-pos content point scroll body-rows)
-            cc (- cursor-col hscroll)
-            cc (if (pos? hscroll) (inc cc) cc)]
-        (t/move cr cc)))
-    (t/show-cur)
-    (t/flush!)
+        :else
+        (do (t/reset-sg) (t/tw (or msg "")) (t/clreol)))
+      ;; cursor
+      (when-not mini
+        (let [[cr _] (cursor-pos content point scroll body-rows)
+              cc (- cursor-col hscroll)
+              cc (if (pos? hscroll) (inc cc) cc)]
+          (t/move cr cc)))
+      (t/show-cur))
     {:scroll scroll :hscroll hscroll}))
