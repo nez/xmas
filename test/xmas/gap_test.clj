@@ -147,3 +147,71 @@
 
 (deftest seqable-after-edit
   (is (= [\a \X \b] (seq (gap/edit (gap/of "ab") 1 1 "X")))))
+
+;; --- Line index ---
+
+(deftest line-count-no-newlines
+  (is (= 1 (gap/line-count (gap/of "hello")))))
+
+(deftest line-count-empty
+  (is (= 1 (gap/line-count (gap/of "")))))
+
+(deftest line-count-multi
+  (is (= 3 (gap/line-count (gap/of "abc\ndef\nghi")))))
+
+(deftest line-count-trailing-newline
+  (is (= 4 (gap/line-count (gap/of "a\nb\nc\n")))))
+
+(deftest line-of-single-line
+  (let [g (gap/of "hello")]
+    (is (= 0 (gap/line-of g 0)))
+    (is (= 0 (gap/line-of g 3)))
+    (is (= 0 (gap/line-of g 5)))))
+
+(deftest line-of-multi
+  (let [g (gap/of "abc\ndef\nghi")]
+    (is (= 0 (gap/line-of g 0)))   ;; 'a'
+    (is (= 0 (gap/line-of g 3)))   ;; '\n'
+    (is (= 1 (gap/line-of g 4)))   ;; 'd'
+    (is (= 1 (gap/line-of g 7)))   ;; '\n'
+    (is (= 2 (gap/line-of g 8)))   ;; 'g'
+    (is (= 2 (gap/line-of g 11))))) ;; end
+
+(deftest line-of-empty
+  (is (= 0 (gap/line-of (gap/of "") 0))))
+
+(deftest nth-line-start-basic
+  (let [g (gap/of "abc\ndef\nghi")]
+    (is (= 0 (gap/nth-line-start g 0)))
+    (is (= 4 (gap/nth-line-start g 1)))
+    (is (= 8 (gap/nth-line-start g 2)))))
+
+(deftest nth-line-end-basic
+  (let [g (gap/of "abc\ndef\nghi")]
+    (is (= 3 (gap/nth-line-end g 0)))
+    (is (= 7 (gap/nth-line-end g 1)))
+    (is (= 11 (gap/nth-line-end g 2)))))  ;; last line, no trailing \n
+
+(deftest nth-line-end-trailing-newline
+  (let [g (gap/of "abc\n")]
+    (is (= 3 (gap/nth-line-end g 0)))     ;; \n position
+    (is (= 4 (gap/nth-line-end g 1)))))   ;; empty last line, end = text length
+
+(deftest line-index-after-edit
+  ;; Insert a newline, verify the index updates
+  (let [g (gap/edit (gap/of "abcdef") 3 3 "\n")]
+    (is (= "abc\ndef" (str g)))
+    (is (= 2 (gap/line-count g)))
+    (is (= 0 (gap/line-of g 0)))
+    (is (= 1 (gap/line-of g 4)))
+    (is (= 0 (gap/nth-line-start g 0)))
+    (is (= 4 (gap/nth-line-start g 1)))
+    (is (= 3 (gap/nth-line-end g 0)))
+    (is (= 7 (gap/nth-line-end g 1)))))
+
+(deftest line-index-after-delete-newline
+  ;; Delete a newline, verify lines merge
+  (let [g (gap/edit (gap/of "abc\ndef") 3 4 "")]
+    (is (= "abcdef" (str g)))
+    (is (= 1 (gap/line-count g)))
+    (is (= 0 (gap/line-of g 3)))))

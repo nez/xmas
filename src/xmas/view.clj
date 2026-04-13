@@ -1,5 +1,6 @@
 (ns xmas.view
-  (:require [xmas.term :as t]
+  (:require [xmas.gap :as gap]
+            [xmas.term :as t]
             [xmas.text :as text]))
 
 (def faces
@@ -10,30 +11,26 @@
 (defn cursor-pos
   "Screen [row col] of point relative to scroll."
   [content point scroll rows]
-  (loop [pos scroll row 0]
+  (let [scroll-line (gap/line-of content scroll)
+        point-line  (gap/line-of content point)
+        row (- point-line scroll-line)]
     (if (>= row rows)
       [(dec rows) 0]
-      (let [eol (text/line-end content pos)
-            nxt (min (inc eol) (count content))]
-        (if (<= pos point eol)
-          [row (text/display-width content pos point)]
-          (recur nxt (inc row)))))))
+      [row (text/display-width content (gap/nth-line-start content point-line) point)])))
 
 (defn- ensure-visible
   "Return adjusted scroll so point is on screen."
   [content point scroll rows]
-  (cond
-    (< point scroll)
-    (text/line-start content point)
+  (let [point-line  (gap/line-of content point)
+        scroll-line (gap/line-of content scroll)]
+    (cond
+      (< point scroll)
+      (gap/nth-line-start content point-line)
 
-    (>= (first (cursor-pos content point scroll rows)) rows)
-    (loop [s scroll]
-      (let [ns (min (inc (text/line-end content s)) (count content))]
-        (if (or (< (first (cursor-pos content point ns rows)) rows)
-                (>= ns (count content)))
-          ns (recur ns))))
+      (>= (- point-line scroll-line) rows)
+      (gap/nth-line-start content (- point-line (dec rows)))
 
-    :else scroll))
+      :else scroll)))
 
 (defn- ensure-hvisible
   "Adjust hscroll so cursor column cc is visible within cols."
@@ -63,20 +60,23 @@
         hscroll (or hscroll 0)
         body-rows (- rows 2)
         scroll (ensure-visible content point scroll body-rows)
-        cursor-col (text/display-width content (text/line-start content point) point)
+        point-line (gap/line-of content point)
+        cursor-col (text/display-width content (gap/nth-line-start content point-line) point)
         hscroll (ensure-hvisible hscroll cursor-col cols)
         mini-row (dec rows)]
     (t/hide-cur)
     ;; text
-    (loop [pos scroll row 0]
-      (when (< row body-rows)
-        (let [eol (text/line-end content pos)
-              line (.toString (.subSequence ^CharSequence content (int pos) (int eol)))
-              nxt (min (inc eol) (count content))]
-          (write-row! row line :default cols hscroll)
-          (recur nxt (inc row)))))
+    (let [start-line (gap/line-of content scroll)
+          total-lines (gap/line-count content)]
+      (loop [ln start-line row 0]
+        (when (and (< row body-rows) (< ln total-lines))
+          (let [pos (gap/nth-line-start content ln)
+                eol (gap/nth-line-end content ln)
+                line (.toString (.subSequence ^CharSequence content (int pos) (int eol)))]
+            (write-row! row line :default cols hscroll)
+            (recur (inc ln) (inc row))))))
     ;; mode line
-    (let [line (inc (count (filter #(= % \newline) (take point content))))
+    (let [line (inc point-line)
           col (inc cursor-col)
           ml (format " %s %s   L%d C%d  (%s)"
                      (if modified "**" "--") (or name display-buf)

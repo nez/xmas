@@ -26,25 +26,31 @@
 
 (defn forward-char [s]  (set-point s (fn [t p] (text/next-pos t p))))
 (defn backward-char [s] (set-point s (fn [t p] (text/prev-pos t p))))
-(defn beginning-of-line [s] (set-point s text/line-start))
-(defn end-of-line [s]       (set-point s text/line-end))
+(defn beginning-of-line [s]
+  (set-point s (fn [t p] (gap/nth-line-start t (gap/line-of t p)))))
+(defn end-of-line [s]
+  (set-point s (fn [t p] (gap/nth-line-end t (gap/line-of t p)))))
 (defn beginning-of-buffer [s] (set-point s (fn [_ _] 0)))
 (defn end-of-buffer [s]       (set-point s (fn [t _] (count t))))
 
 (defn next-line [s]
   (set-point s (fn [t p]
-    (let [col (text/display-width t (text/line-start t p) p)
-          nxt (min (inc (text/line-end t p)) (count t))]
-      (if (>= nxt (count t)) (count t)
-        (text/pos-at-col t nxt (text/line-end t nxt) col))))))
+    (let [ln  (gap/line-of t p)
+          col (text/display-width t (gap/nth-line-start t ln) p)
+          nxt (inc ln)]
+      (if (>= nxt (gap/line-count t))
+        (count t)
+        (text/pos-at-col t (gap/nth-line-start t nxt)
+                           (gap/nth-line-end t nxt) col))))))
 
 (defn previous-line [s]
   (set-point s (fn [t p]
-    (let [col (text/display-width t (text/line-start t p) p)
-          ls (text/line-start t p)]
-      (if (<= ls 0) 0
-        (let [pe (dec ls)]
-          (text/pos-at-col t (text/line-start t pe) pe col)))))))
+    (let [ln  (gap/line-of t p)
+          col (text/display-width t (gap/nth-line-start t ln) p)]
+      (if (zero? ln) 0
+        (let [prev (dec ln)]
+          (text/pos-at-col t (gap/nth-line-start t prev)
+                             (gap/nth-line-end t prev) col)))))))
 
 (defn scroll-down [s]
   (let [n (max 1 (- (:rows s 24) 2))]
@@ -118,12 +124,9 @@
 (defn goto-line [s input]
   (if-let [n (try (Integer/parseInt (str/trim input)) (catch Exception _ nil))]
     (set-point s (fn [t _]
-      (let [target (max 1 n)]
-        (loop [pos 0 line 1]
-          (cond
-            (>= line target) pos
-            (>= pos (count t)) pos
-            :else (recur (min (inc (text/line-end t pos)) (count t)) (inc line)))))))
+      (let [target (dec (max 1 n))
+            clamped (min target (dec (gap/line-count t)))]
+        (gap/nth-line-start t clamped))))
     (msg s "Not a number")))
 
 (defn save-buffer [s]

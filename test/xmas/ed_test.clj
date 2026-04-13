@@ -303,7 +303,7 @@
 
 (deftest goto-line-past-end
   (let [s' (ed/goto-line (make-state "aaa\nbbb" 0) "99")]
-    (is (= 7 (point s')))))
+    (is (= 4 (point s')))))  ;; clamps to start of last line
 
 (deftest goto-line-not-a-number
   (let [s' (ed/goto-line (make-state "abc" 0) "xyz")]
