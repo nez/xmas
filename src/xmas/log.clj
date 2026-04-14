@@ -1,4 +1,5 @@
 (ns xmas.log
+  (:require [clojure.string :as str])
   (:import [java.io FileWriter]
            [java.time LocalDateTime]
            [java.time.format DateTimeFormatter]))
@@ -17,7 +18,7 @@
 (defn log [& args]
   (when-let [^FileWriter w @log-file]
     (let [ts (.format (LocalDateTime/now) fmt)
-          msg (apply str (interpose " " args))]
+          msg (str/join " " args)]
       (locking w
         (.write w (str ts " " msg "\n"))
         (.flush w)))))

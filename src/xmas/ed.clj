@@ -25,8 +25,8 @@
 
 ;; --- Commands (state → state) ---
 
-(defn forward-char [s]  (set-point s (fn [t p] (text/next-pos t p))))
-(defn backward-char [s] (set-point s (fn [t p] (text/prev-pos t p))))
+(defn forward-char [s]  (set-point s text/next-pos))
+(defn backward-char [s] (set-point s text/prev-pos))
 (defn beginning-of-line [s] (set-point s text/line-start))
 (defn end-of-line [s]       (set-point s text/line-end))
 (defn beginning-of-buffer [s] (set-point s (fn [_ _] 0)))
@@ -145,7 +145,7 @@
 
 (defn find-file [s filename]
   (let [path (.getCanonicalPath (java.io.File. filename))
-        name (or (last (str/split path #"/")) path)]
+        name (.getName (java.io.File. path))]
     (if (.exists (java.io.File. path))
       (try (let [raw (slurp path)
                  crlf (re-find #"\r\n" raw)

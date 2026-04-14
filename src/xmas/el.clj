@@ -20,8 +20,8 @@
 (defn- err [msg]
   (throw (ex-info msg {:detail msg})))
 
-(defn- ws? [ch]
-  (or (= ch \space) (= ch \tab) (= ch \newline) (= ch \return)))
+(def ^:private ws-chars #{\space \tab \newline \return})
+(defn- ws? [ch] (contains? ws-chars ch))
 
 (defn- skip-ws [^PushbackReader rdr]
   (loop []
@@ -194,15 +194,9 @@
     (when (and (nil? rest) (> n-args (+ n-req n-opt)))
       (err (str "Wrong number of arguments for " fn-name
                 ": expected at most " (+ n-req n-opt) ", got " n-args)))
-    (let [result (transient {})]
-      (dotimes [i n-req]
-        (assoc! result (nth required i) (nth call-args i)))
-      (dotimes [i n-opt]
-        (let [idx (+ n-req i)]
-          (assoc! result (nth optional i) (if (< idx n-args) (nth call-args idx) nil))))
-      (when rest
-        (assoc! result rest (seq (drop (+ n-req n-opt) call-args))))
-      (persistent! result))))
+    (merge (zipmap required call-args)
+           (zipmap optional (concat (drop n-req call-args) (repeat nil)))
+           (when rest {rest (seq (drop (+ n-req n-opt) call-args))}))))
 
 ;; --- Special forms ---
 
@@ -223,13 +217,11 @@
           (recur (rest cs)))))))
 
 (defn- eval-setq [args]
-  (loop [pairs (partition 2 args) result nil]
-    (if-not (seq pairs)
-      result
-      (let [[sym val] (first pairs)
-            v (eval val)]
-        (swap! *vars* assoc sym v)
-        (recur (rest pairs) v)))))
+  (reduce (fn [_ [sym val-form]]
+            (let [v (eval val-form)]
+              (swap! *vars* assoc sym v)
+              v))
+          nil (partition 2 args)))
 
 (defn- eval-let [args]
   (let [[bindings & body] args
@@ -286,16 +278,10 @@
       (recur))))
 
 (defn- eval-and [args]
-  (loop [forms args result true]
-    (if-not (seq forms) result
-      (let [v (eval (first forms))]
-        (if-not v nil (recur (rest forms) v))))))
+  (reduce (fn [_ form] (let [v (eval form)] (if v v (reduced nil)))) true args))
 
 (defn- eval-or [args]
-  (loop [forms args]
-    (when (seq forms)
-      (let [v (eval (first forms))]
-        (if v v (recur (rest forms)))))))
+  (reduce (fn [_ form] (let [v (eval form)] (if v (reduced v) nil))) nil args))
 
 (defn- eval-save-excursion [body]
   (let [{:keys [point mark]} (el-cur)]
@@ -309,15 +295,14 @@
 (defn- expand-backquote-elems
   "Walk elements of a backquoted collection, handling splice-unquote."
   [form]
-  (let [result (java.util.ArrayList.)]
-    (doseq [elem form]
-      (if (and (seq? elem) (= (first elem) 'splice-unquote))
-        (let [v (eval (second elem))]
-          (when (and v (not (or (seq? v) (sequential? v))))
-            (err (str "Attempt to splice non-list: " (pr-str v))))
-          (doseq [x v] (.add result x)))
-        (.add result (expand-backquote elem))))
-    (seq result)))
+  (seq (mapcat (fn [elem]
+                 (if (and (seq? elem) (= (first elem) 'splice-unquote))
+                   (let [v (eval (second elem))]
+                     (when (and v (not (or (seq? v) (sequential? v))))
+                       (err (str "Attempt to splice non-list: " (pr-str v))))
+                     v)
+                   [(expand-backquote elem)]))
+               form)))
 
 (defn- expand-backquote
   "Process a backquote template into a value."
@@ -502,11 +487,7 @@
   (get-in @*plists* [sym prop]))
 
 (defn- el-plist-get [plist prop]
-  (loop [pl (seq plist)]
-    (when (and pl (next pl))
-      (if (= (first pl) prop)
-        (second pl)
-        (recur (nnext pl))))))
+  (some (fn [[k v]] (when (= k prop) v)) (partition 2 plist)))
 
 (defn- el-plist-put [plist prop val]
   (loop [pl (seq plist) acc [] found false]
@@ -686,18 +667,23 @@
 ;; PUBLIC API
 ;; ============================================================
 
+(def ^:private env-bindings
+  [[#'*vars*      :el-vars      {}]
+   [#'*fns*       :el-fns       {}]
+   [#'*macros*    :el-macros    {}]
+   [#'*docs*      :el-docs      {}]
+   [#'*features*  :el-features  #{}]
+   [#'*load-path* :el-load-path [(str (System/getProperty "user.home") "/.xmas/lisp/")]]
+   [#'*plists*    :el-plists    {}]
+   [#'*loading*   :el-loading   #{}]])
+
 (defn- bind-all
   "Bind all dynamic vars from editor state, creating defaults for missing ones."
   [editor-state]
-  {#'*vars*      (or (:el-vars @editor-state)      (atom {}))
-   #'*fns*       (or (:el-fns @editor-state)       (atom {}))
-   #'*macros*    (or (:el-macros @editor-state)     (atom {}))
-   #'*docs*      (or (:el-docs @editor-state)       (atom {}))
-   #'*features*  (or (:el-features @editor-state)   (atom #{}))
-   #'*load-path* (or (:el-load-path @editor-state)  (atom [(str (System/getProperty "user.home") "/.xmas/lisp/")]))
-   #'*plists*    (or (:el-plists @editor-state)     (atom {}))
-   #'*loading*   (or (:el-loading @editor-state)    (atom #{}))
-   #'*state*     editor-state})
+  (into {#'*state* editor-state}
+        (map (fn [[var-ref k default]]
+               [var-ref (or (get @editor-state k) (atom default))]))
+        env-bindings))
 
 (defn- persist-all!
   "Save all dynamic var atoms back into editor state."

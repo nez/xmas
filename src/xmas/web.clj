@@ -14,14 +14,12 @@
     (str sb)))
 
 (defn broadcast! [_ _ old new]
-  (when (or (not= (:bufs old) (:bufs new))
-            (not= (:buf old) (:buf new))
-            (not= (:mini old) (:mini new))
-            (not= (:msg old) (:msg new)))
+  (let [ks [:bufs :buf :mini :msg]]
+    (when (not= (select-keys old ks) (select-keys new ks))
     (let [frame (render-to-string new)]
       (doseq [ch @clients]
         (try (http/send! ch frame)
-             (catch Exception _ (swap! clients disj ch)))))))
+             (catch Exception _ (swap! clients disj ch))))))))
 
 (defn- ws-handler [editor-atom handle-key-fn req]
   (http/as-channel req

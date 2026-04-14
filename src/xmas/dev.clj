@@ -1,5 +1,6 @@
 (ns xmas.dev
-  (:require [xmas.log :as log])
+  (:require [clojure.string :as str]
+            [xmas.log :as log])
   (:import [java.nio.file FileSystems StandardWatchEventKinds Path]))
 
 (defn ns-for-file
@@ -7,10 +8,10 @@
   [^String path]
   (when (.endsWith path ".clj")
     (-> path
-        (.replace "src/" "")
-        (.replace "/" ".")
-        (.replace "_" "-")
-        (.replace ".clj" "")
+        (str/replace #"^src/" "")
+        (str/replace "/" ".")
+        (str/replace "_" "-")
+        (str/replace #"\.clj$" "")
         symbol)))
 
 (defn reload! [ns-sym]
