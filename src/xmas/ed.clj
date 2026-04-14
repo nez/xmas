@@ -1,6 +1,8 @@
 (ns xmas.ed
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [xmas.buf :as buf]
+            [xmas.el :as el]
             [xmas.term :as t]
             [xmas.text :as text]
             [xmas.view :as view]
@@ -8,8 +10,7 @@
             [nrepl.server :as nrepl]
             [xmas.web :as web]
             [xmas.dev :as dev])
-  (:import [java.nio.file Files StandardCopyOption]
-           [java.nio.file.attribute PosixFilePermissions])
+  (:import [java.nio.file Files StandardCopyOption])
   (:gen-class))
 
 ;; --- Editor state ---
@@ -295,6 +296,15 @@
     (string? key)       (isearch-append s key)
     :else               (-> (isearch-accept s) (handle-key key))))
 
+;; --- Eval expression (M-:) ---
+
+(defn- eval-expression [s input]
+  (try
+    (let [result (el/eval-1 input editor)]
+      (msg s (str "=> " (pr-str result))))
+    (catch Exception e
+      (msg s (str "Error: " (.getMessage e))))))
+
 ;; --- Bindings ---
 
 (def bindings
@@ -308,6 +318,7 @@
    :page-down scroll-down, :page-up scroll-up
    [:ctrl \v] scroll-down, [:meta \v] scroll-up
    [:meta \g] (fn [s] (mini-start s "Goto line: " goto-line))
+   [:meta \:] (fn [s] (mini-start s "Eval: " eval-expression))
    :return insert-newline
    [:ctrl \d] delete-char, :backspace delete-backward-char
    [:ctrl \k] kill-line, [:ctrl \w] kill-region
@@ -358,7 +369,8 @@
 
       ;; normal dispatch
       :else
-      (let [binding (get bindings key)]
+      (let [binding (or (get bindings key)
+                        (get (:el-bindings s) key))]
         (cond
           (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
           (fn? binding)  (binding s)
@@ -404,6 +416,15 @@
                      (when (.exists (java.io.File. p)) p))]
         (try (load-file f)
              (catch Exception e (swap! editor msg (str "Init: " (.getMessage e))))))
+      ;; Load Elisp bootstrap and user init
+      (try (when-let [subr (io/resource "xmas/subr.el")]
+             (el/eval-string (slurp subr) editor))
+           (catch Exception e (log/log "subr.el:" (.getMessage e))))
+      (let [init-el (str (System/getProperty "user.home") "/.xmas/init.el")]
+        (when (.exists (java.io.File. init-el))
+          (try (el/eval-string (slurp init-el) editor)
+               (log/log "loaded init.el")
+               (catch Exception e (swap! editor msg (str "init.el: " (.getMessage e)))))))
       ;; Redirect stdout/stderr so nREPL output doesn't corrupt the terminal
       (let [null-out (java.io.PrintStream. (java.io.OutputStream/nullOutputStream))]
         (System/setOut null-out)
