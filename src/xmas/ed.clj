@@ -74,7 +74,7 @@
     (if (> p 0) (edit s (text/prev-pos t p) p "") s)))
 
 (defn- kill-push [s text]
-  (update s :kill #(conj (if (>= (count %) 60) (subvec % 1) %) text)))
+  (update s :kill buf/bounded-conj 60 text))
 
 (defn kill-line [s]
   (let [b (cur s) p (:point b) t (:text b)
@@ -184,29 +184,25 @@
           (on-done input)))
     s))
 
-(defn- mini-history-prev [s]
-  (let [hist (:mini-history s [])
-        idx (get-in s [:mini :history-idx])
-        new-idx (min (inc idx) (dec (count hist)))]
-    (if (and (seq hist) (< idx (dec (count hist))))
-      (let [entry (get hist (- (dec (count hist)) new-idx))]
-        (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
-              (assoc-in [:bufs " *mini*" :point] (count entry))))
-      s)))
+(defn- set-mini-text [s text]
+  (-> s
+      (assoc-in [:bufs " *mini*" :text] text)
+      (assoc-in [:bufs " *mini*" :point] (count text))))
 
-(defn- mini-history-next [s]
-  (let [idx (get-in s [:mini :history-idx])]
-    (if (> idx 0)
-      (let [hist (:mini-history s [])
-            new-idx (dec idx)
-            entry (get hist (- (dec (count hist)) new-idx))]
-        (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
-              (assoc-in [:bufs " *mini*" :point] (count entry))))
+(defn- mini-history-move [s delta]
+  (let [hist (:mini-history s [])
+        idx  (get-in s [:mini :history-idx])
+        new-idx (+ idx delta)]
+    (cond
+      (<= 0 new-idx (dec (count hist)))
+      (-> s (assoc-in [:mini :history-idx] new-idx)
+            (set-mini-text (get hist (- (dec (count hist)) new-idx))))
+
+      (and (neg? delta) (< new-idx 0))
       (-> s (assoc-in [:mini :history-idx] -1)
-            (assoc-in [:bufs " *mini*" :text] "")
-            (assoc-in [:bufs " *mini*" :point] 0)))))
+            (set-mini-text ""))
+
+      :else s)))
 
 (defn- file-completer
   "Tab-complete file paths. Returns {:completed str :candidates [str]}."
@@ -240,8 +236,7 @@
     (let [input (:text (cur s))
           {:keys [completed candidates]} (completer input)]
       (-> s
-          (assoc-in [:bufs " *mini*" :text] completed)
-          (assoc-in [:bufs " *mini*" :point] (count completed))
+          (set-mini-text completed)
           (cond-> (seq candidates) (msg (str/join " " candidates)))))
     s))
 
@@ -353,10 +348,10 @@
       (mini-accept s)
 
       (and (:mini s) (= key [:meta \p]))
-      (mini-history-prev s)
+      (mini-history-move s 1)
 
       (and (:mini s) (= key [:meta \n]))
-      (mini-history-next s)
+      (mini-history-move s -1)
 
       (and (:mini s) (= key :tab))
       (mini-tab-complete s)

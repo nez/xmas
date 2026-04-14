@@ -170,3 +170,35 @@
 
 (deftest word-backward-empty
   (is (= 0 (text/word-backward "" 0))))
+
+;; --- search-forward / search-backward ---
+
+(deftest search-forward-basic
+  (is (= 6 (text/search-forward "hello world" "world" 0))))
+
+(deftest search-forward-from-middle
+  (is (= 6 (text/search-forward "hello world" "world" 3))))
+
+(deftest search-forward-at-match
+  (is (= 0 (text/search-forward "hello" "hello" 0))))
+
+(deftest search-forward-not-found
+  (is (nil? (text/search-forward "hello" "xyz" 0))))
+
+(deftest search-forward-empty-pattern
+  (is (nil? (text/search-forward "hello" "" 0))))
+
+(deftest search-backward-basic
+  (is (= 6 (text/search-backward "hello world" "world" 11))))
+
+(deftest search-backward-from-middle
+  (is (= 0 (text/search-backward "hello world" "hello" 6))))
+
+(deftest search-backward-not-found
+  (is (nil? (text/search-backward "hello" "xyz" 5))))
+
+(deftest search-backward-empty-pattern
+  (is (nil? (text/search-backward "hello" "" 5))))
+
+(deftest search-backward-at-start
+  (is (= 0 (text/search-backward "hello" "hello" 5))))

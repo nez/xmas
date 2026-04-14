@@ -94,3 +94,29 @@
         b' (buf/edit b 1 3 "X")]
     (is (= 1 (count (:undo b'))))
     (is (= {:from 1 :old "el" :new "X"} (first (:undo b'))))))
+
+;; --- Redo ---
+
+(deftest redo-empty-returns-unchanged
+  (let [b (buf/make "t" "hello" nil)]
+    (is (= b (buf/redo b)))))
+
+(deftest redo-after-undo
+  (let [b (buf/make "t" "hello" nil)
+        b' (buf/edit b 1 3 "X")
+        b'' (buf/undo b')
+        b''' (buf/redo b'')]
+    (is (= "hXlo" (:text b''')))
+    (is (= 2 (:point b''')))))
+
+(deftest undo-redo-roundtrip
+  (let [b (buf/make "t" "abc" nil)
+        b1 (buf/edit b 3 3 "d")
+        b2 (buf/edit b1 4 4 "e")
+        u1 (buf/undo b2)
+        u2 (buf/undo u1)
+        r1 (buf/redo u2)
+        r2 (buf/redo r1)]
+    (is (= "abc" (:text u2)))
+    (is (= "abcd" (:text r1)))
+    (is (= "abcde" (:text r2)))))

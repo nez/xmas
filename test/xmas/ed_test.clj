@@ -276,3 +276,40 @@
         s' (ed/handle-key s :return)]
     (is @accepted)
     (is (nil? (:mini s')))))
+
+;; --- Mini-history navigation ---
+
+(deftest mini-history-prev-from-fresh
+  (let [s (-> (make-state "abc" 0)
+              (assoc :mini-history ["first" "second" "third"])
+              (ed/mini-start "Test: " (fn [s _] s)))
+        s' (ed/handle-key s [:meta \p])]
+    (is (= "third" (:text (get (:bufs s') " *mini*"))))))
+
+(deftest mini-history-prev-twice
+  (let [s (-> (make-state "abc" 0)
+              (assoc :mini-history ["first" "second" "third"])
+              (ed/mini-start "Test: " (fn [s _] s)))
+        s' (-> s (ed/handle-key [:meta \p]) (ed/handle-key [:meta \p]))]
+    (is (= "second" (:text (get (:bufs s') " *mini*"))))))
+
+(deftest mini-history-prev-at-oldest
+  (let [s (-> (make-state "abc" 0)
+              (assoc :mini-history ["only"])
+              (ed/mini-start "Test: " (fn [s _] s)))
+        s' (-> s (ed/handle-key [:meta \p]) (ed/handle-key [:meta \p]))]
+    (is (= "only" (:text (get (:bufs s') " *mini*"))))))
+
+(deftest mini-history-next-back-to-empty
+  (let [s (-> (make-state "abc" 0)
+              (assoc :mini-history ["first" "second"])
+              (ed/mini-start "Test: " (fn [s _] s)))
+        s' (-> s (ed/handle-key [:meta \p]) (ed/handle-key [:meta \n]))]
+    (is (= "" (:text (get (:bufs s') " *mini*"))))))
+
+(deftest mini-history-next-without-prev
+  (let [s (-> (make-state "abc" 0)
+              (assoc :mini-history ["first"])
+              (ed/mini-start "Test: " (fn [s _] s)))
+        s' (ed/handle-key s [:meta \n])]
+    (is (= "" (:text (get (:bufs s') " *mini*"))))))

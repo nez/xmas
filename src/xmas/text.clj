@@ -80,16 +80,19 @@
         (if (> nw col) p
           (recur (+ p (Character/charCount cp)) nw))))))
 
+(defn- search* [^String t ^String pattern ^long from direction]
+  (when (seq pattern)
+    (let [i (if (= direction :forward)
+              (.indexOf t pattern (int from))
+              (.lastIndexOf t pattern (int (max 0 (dec from)))))]
+      (when-not (neg? i) i))))
+
 (defn search-forward
   "Position of pattern in t at or after from, or nil."
-  [^String t ^String pattern ^long from]
-  (when (seq pattern)
-    (let [i (.indexOf t pattern (int from))]
-      (when-not (neg? i) i))))
+  [t pattern from]
+  (search* t pattern from :forward))
 
 (defn search-backward
   "Position of pattern in t before from, or nil."
-  [^String t ^String pattern ^long from]
-  (when (seq pattern)
-    (let [i (.lastIndexOf t pattern (int (max 0 (dec from))))]
-      (when-not (neg? i) i))))
+  [t pattern from]
+  (search* t pattern from :backward))
