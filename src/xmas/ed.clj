@@ -336,6 +336,12 @@
                                     (msg "Modified buffers exist. C-x C-c again to quit."))))
                \b         (fn [s] (mini-start s "Buffer: " switch-buffer))}})
 
+(def ^:private mini-bindings
+  {:return   mini-accept
+   [:meta \p] #(mini-history-move % 1)
+   [:meta \n] #(mini-history-move % -1)
+   :tab      mini-tab-complete})
+
 (defn handle-key
   "Pure state transition. Handles prefix keys via :pending state.
    Works identically for terminal and web — one key at a time."
@@ -355,17 +361,8 @@
       (handle-isearch s key)
 
       ;; minibuffer keys
-      (and (:mini s) (= key :return))
-      (mini-accept s)
-
-      (and (:mini s) (= key [:meta \p]))
-      (mini-history-move s 1)
-
-      (and (:mini s) (= key [:meta \n]))
-      (mini-history-move s -1)
-
-      (and (:mini s) (= key :tab))
-      (mini-tab-complete s)
+      (and (:mini s) (get mini-bindings key))
+      ((get mini-bindings key) s)
 
       ;; normal dispatch
       :else

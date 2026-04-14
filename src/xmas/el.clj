@@ -338,11 +338,11 @@
 
 (defn- el-forward-char [& [n]]
   (dotimes [_ (or n 1)]
-    (update-buf! #(buf/set-point % (fn [t p] (text/next-pos t p))))))
+    (update-buf! #(buf/set-point % text/next-pos))))
 
 (defn- el-backward-char [& [n]]
   (dotimes [_ (or n 1)]
-    (update-buf! #(buf/set-point % (fn [t p] (text/prev-pos t p))))))
+    (update-buf! #(buf/set-point % text/prev-pos))))
 
 (defn- el-beginning-of-line []
   (update-buf! #(buf/set-point % text/line-start)))
@@ -690,22 +690,24 @@
   (when-let [user-binds (get @*vars* :xmas/bindings)]
     (swap! editor-state assoc :el-bindings user-binds)))
 
+(defn- eval-with-env
+  "Bind all Elisp dynamic vars, run f, persist state back."
+  [editor-state f]
+  (with-bindings (bind-all editor-state)
+    (let [result (f)]
+      (persist-all! editor-state)
+      result)))
+
 (defn eval-string
   "Read and evaluate all forms in an elisp string.
    editor-state is an atom. Returns the last evaluation result."
   [^String s editor-state]
   (let [forms (read-all s)]
-    (with-bindings (bind-all editor-state)
-      (let [result (reduce (fn [_ form] (eval form)) nil forms)]
-        (persist-all! editor-state)
-        result))))
+    (eval-with-env editor-state #(eval-body forms))))
 
 (defn eval-1
   "Read and evaluate a single elisp expression. Returns the result."
   [^String s editor-state]
   (let [forms (read-all s)]
     (when (seq forms)
-      (with-bindings (bind-all editor-state)
-        (let [result (eval (first forms))]
-          (persist-all! editor-state)
-          result)))))
+      (eval-with-env editor-state #(eval (first forms))))))
