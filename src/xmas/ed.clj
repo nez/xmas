@@ -1,6 +1,8 @@
 (ns xmas.ed
   (:require [clojure.string :as str]
             [xmas.buf :as buf]
+            [xmas.el :as el]
+            [xmas.gap :as gap]
             [xmas.term :as t]
             [xmas.text :as text]
             [xmas.view :as view]
@@ -8,8 +10,7 @@
             [nrepl.server :as nrepl]
             [xmas.web :as web]
             [xmas.dev :as dev])
-  (:import [java.nio.file Files StandardCopyOption]
-           [java.nio.file.attribute PosixFilePermissions])
+  (:import [java.nio.file Files StandardCopyOption])
   (:gen-class))
 
 ;; --- Editor state ---
@@ -26,25 +27,31 @@
 
 (defn forward-char [s]  (set-point s (fn [t p] (text/next-pos t p))))
 (defn backward-char [s] (set-point s (fn [t p] (text/prev-pos t p))))
-(defn beginning-of-line [s] (set-point s text/line-start))
-(defn end-of-line [s]       (set-point s text/line-end))
+(defn beginning-of-line [s]
+  (set-point s (fn [t p] (gap/nth-line-start t (gap/line-of t p)))))
+(defn end-of-line [s]
+  (set-point s (fn [t p] (gap/nth-line-end t (gap/line-of t p)))))
 (defn beginning-of-buffer [s] (set-point s (fn [_ _] 0)))
 (defn end-of-buffer [s]       (set-point s (fn [t _] (count t))))
 
 (defn next-line [s]
   (set-point s (fn [t p]
-    (let [col (text/display-width t (text/line-start t p) p)
-          nxt (min (inc (text/line-end t p)) (count t))]
-      (if (>= nxt (count t)) (count t)
-        (text/pos-at-col t nxt (text/line-end t nxt) col))))))
+    (let [ln  (gap/line-of t p)
+          col (text/display-width t (gap/nth-line-start t ln) p)
+          nxt (inc ln)]
+      (if (>= nxt (gap/line-count t))
+        (count t)
+        (text/pos-at-col t (gap/nth-line-start t nxt)
+                           (gap/nth-line-end t nxt) col))))))
 
 (defn previous-line [s]
   (set-point s (fn [t p]
-    (let [col (text/display-width t (text/line-start t p) p)
-          ls (text/line-start t p)]
-      (if (<= ls 0) 0
-        (let [pe (dec ls)]
-          (text/pos-at-col t (text/line-start t pe) pe col)))))))
+    (let [ln  (gap/line-of t p)
+          col (text/display-width t (gap/nth-line-start t ln) p)]
+      (if (zero? ln) 0
+        (let [prev (dec ln)]
+          (text/pos-at-col t (gap/nth-line-start t prev)
+                             (gap/nth-line-end t prev) col)))))))
 
 (defn scroll-down [s]
   (let [n (max 1 (- (:rows s 24) 2))]
@@ -81,15 +88,16 @@
         eol (text/line-end t p)
         end (if (= p eol) (min (inc eol) (count t)) eol)]
     (if (< p end)
-      (-> (edit s p end "") (kill-push (subs t p end)))
+      (-> (edit s p end "") (kill-push (.toString (.subSequence ^CharSequence t (int p) (int end)))))
       s)))
 
 (defn kill-region [s]
   (let [b (cur s) mark (:mark b)]
     (if-not mark s
-      (let [from (min mark (:point b)) to (max mark (:point b))]
+      (let [from (min mark (:point b)) to (max mark (:point b))
+            ^CharSequence t (:text b)]
         (-> (edit s from to "")
-            (kill-push (subs (:text b) from to))
+            (kill-push (.toString (.subSequence t (int from) (int to))))
             (update-cur #(assoc % :mark nil)))))))
 
 (defn yank [s]
@@ -117,12 +125,9 @@
 (defn goto-line [s input]
   (if-let [n (try (Integer/parseInt (str/trim input)) (catch Exception _ nil))]
     (set-point s (fn [t _]
-      (let [target (max 1 n)]
-        (loop [pos 0 line 1]
-          (cond
-            (>= line target) pos
-            (>= pos (count t)) pos
-            :else (recur (min (inc (text/line-end t pos)) (count t)) (inc line)))))))
+      (let [target (dec (max 1 n))
+            clamped (min target (dec (gap/line-count t)))]
+        (gap/nth-line-start t clamped))))
     (msg s "Not a number")))
 
 (defn save-buffer [s]
@@ -155,7 +160,7 @@
            (catch Exception e
              (msg s (str "Error reading " path ": " (.getMessage e)))))
       (-> s (assoc-in [:bufs path] (buf/make name "" path)) (assoc :buf path)
-            (msg (str "(New file)"))))))
+            (msg "(New file)")))))
 
 (defn switch-buffer [s name]
   (if (get (:bufs s) name)
@@ -176,7 +181,7 @@
 
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
-    (let [input (:text (cur s))]
+    (let [input (str (:text (cur s)))]
       (-> s
           (assoc :buf prev-buf :mini nil)
           (update :mini-history #(if (and (seq input) (not= input (peek %)))
@@ -191,7 +196,7 @@
     (if (and (seq hist) (< idx (dec (count hist))))
       (let [entry (get hist (- (dec (count hist)) new-idx))]
         (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
+              (assoc-in [:bufs " *mini*" :text] (gap/of entry))
               (assoc-in [:bufs " *mini*" :point] (count entry))))
       s)))
 
@@ -202,10 +207,10 @@
             new-idx (dec idx)
             entry (get hist (- (dec (count hist)) new-idx))]
         (-> s (assoc-in [:mini :history-idx] new-idx)
-              (assoc-in [:bufs " *mini*" :text] entry)
+              (assoc-in [:bufs " *mini*" :text] (gap/of entry))
               (assoc-in [:bufs " *mini*" :point] (count entry))))
       (-> s (assoc-in [:mini :history-idx] -1)
-            (assoc-in [:bufs " *mini*" :text] "")
+            (assoc-in [:bufs " *mini*" :text] (gap/of ""))
             (assoc-in [:bufs " *mini*" :point] 0)))))
 
 (defn- file-completer
@@ -237,10 +242,10 @@
 
 (defn- mini-tab-complete [s]
   (if-let [completer (get-in s [:mini :completer])]
-    (let [input (:text (cur s))
+    (let [input (str (:text (cur s)))
           {:keys [completed candidates]} (completer input)]
       (-> s
-          (assoc-in [:bufs " *mini*" :text] completed)
+          (assoc-in [:bufs " *mini*" :text] (gap/of completed))
           (assoc-in [:bufs " *mini*" :point] (count completed))
           (cond-> (seq candidates) (msg (str/join " " candidates)))))
     s))
@@ -300,6 +305,15 @@
     (string? key)       (isearch-append s key)
     :else               (-> (isearch-accept s) (handle-key key))))
 
+;; --- Eval expression (M-:) ---
+
+(defn- eval-expression [s input]
+  (try
+    (let [result (el/eval-1 input editor)]
+      (msg s (pr-str result)))
+    (catch Exception e
+      (msg s (str "Eval error: " (.getMessage e))))))
+
 ;; --- Bindings ---
 
 (def bindings
@@ -313,6 +327,7 @@
    :page-down scroll-down, :page-up scroll-up
    [:ctrl \v] scroll-down, [:meta \v] scroll-up
    [:meta \g] (fn [s] (mini-start s "Goto line: " goto-line))
+   [:meta \:] (fn [s] (mini-start s "Eval: " eval-expression))
    :return insert-newline
    [:ctrl \d] delete-char, :backspace delete-backward-char
    [:ctrl \k] kill-line, [:ctrl \w] kill-region
@@ -363,7 +378,8 @@
 
       ;; normal dispatch
       :else
-      (let [binding (get bindings key)]
+      (let [binding (or (get bindings key)
+                        (get (:el-bindings s) key))]
         (cond
           (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
           (fn? binding)  (binding s)
@@ -409,6 +425,11 @@
                      (when (.exists (java.io.File. p)) p))]
         (try (load-file f)
              (catch Exception e (swap! editor msg (str "Init: " (.getMessage e))))))
+      (when-let [f (let [p (str (System/getProperty "user.home") "/.xmas/init.el")]
+                     (when (.exists (java.io.File. p)) p))]
+        (try (el/eval-string (slurp f) editor)
+             (log/log "loaded init.el")
+             (catch Exception e (swap! editor msg (str "Init.el: " (.getMessage e))))))
       ;; Redirect stdout/stderr so nREPL output doesn't corrupt the terminal
       (let [null-out (java.io.PrintStream. (java.io.OutputStream/nullOutputStream))]
         (System/setOut null-out)

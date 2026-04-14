@@ -1,6 +1,7 @@
 (ns xmas.spec
   (:require [clojure.spec.alpha :as s]
-            [clojure.test.check.generators :as gen]))
+            [clojure.test.check.generators :as gen]
+            [xmas.gap :as gap]))
 
 ;; --- Helpers ---
 
@@ -16,7 +17,7 @@
 ;; --- Buffer specs ---
 
 (s/def ::name string?)
-(s/def ::text string?)
+(s/def ::text #(instance? CharSequence %))
 (s/def ::point nat-int?)
 (s/def ::mark (s/nilable nat-int?))
 (s/def ::file (s/nilable string?))
@@ -84,7 +85,7 @@
             idx gen/nat]
     (let [bounds (codepoint-boundaries text)
           point (nth bounds (mod idx (count bounds)))]
-      {:name "*test*" :text text :point point :mark nil :file nil
+      {:name "*test*" :text (gap/of text) :point point :mark nil :file nil
        :modified false :mode :fundamental :undo []})))
 
 (def gen-editor
@@ -104,7 +105,7 @@
             repl (gen/one-of [(gen/return "") (gen/not-empty gen/string-alphanumeric)])
             i gen/nat
             j gen/nat]
-    (let [bounds (codepoint-boundaries (:text buffer))
+    (let [bounds (codepoint-boundaries (str (:text buffer)))
           n (count bounds)
           p1 (nth bounds (mod i n))
           p2 (nth bounds (mod j n))
