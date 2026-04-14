@@ -60,33 +60,19 @@
 
 (declare read)
 
-(defn- read-list [^PushbackReader rdr]
+(defn- read-delimited [^PushbackReader rdr close-ch label result-fn]
   (loop [acc []]
     (skip-ws rdr)
     (let [ch (peek-ch rdr)]
       (cond
-        (nil? ch) (err "Unterminated list")
-        (= ch \)) (do (read-ch rdr) (apply list acc))
-        :else     (recur (conj acc (read rdr)))))))
+        (nil? ch)       (err (str "Unterminated " label))
+        (= ch close-ch) (do (read-ch rdr) (result-fn acc))
+        :else           (recur (conj acc (read rdr)))))))
 
-(defn- read-vector [^PushbackReader rdr]
-  (loop [acc []]
-    (skip-ws rdr)
-    (let [ch (peek-ch rdr)]
-      (cond
-        (nil? ch) (err "Unterminated vector")
-        (= ch \]) (do (read-ch rdr) acc)
-        :else     (recur (conj acc (read rdr)))))))
-
-(defn- read-quote [^PushbackReader rdr]
+(defn- read-wrapping [^PushbackReader rdr sym label]
   (let [form (read rdr)]
-    (when (= form ::eof) (err "Unexpected EOF after quote"))
-    (list 'quote form)))
-
-(defn- read-backquote [^PushbackReader rdr]
-  (let [form (read rdr)]
-    (when (= form ::eof) (err "Unexpected EOF after backquote"))
-    (list 'backquote form)))
+    (when (= form ::eof) (err (str "Unexpected EOF after " label)))
+    (list sym form)))
 
 (defn- read-unquote [^PushbackReader rdr]
   (let [ch (peek-ch rdr)]
@@ -134,12 +120,12 @@
     (cond
       (nil? ch) ::eof
       (= ch \") (read-string-literal rdr)
-      (= ch \() (read-list rdr)
+      (= ch \() (read-delimited rdr \) "list" #(apply list %))
       (= ch \)) (err "Unexpected ')'")
-      (= ch \[) (read-vector rdr)
+      (= ch \[) (read-delimited rdr \] "vector" identity)
       (= ch \]) (err "Unexpected ']'")
-      (= ch \') (read-quote rdr)
-      (= ch \`) (read-backquote rdr)
+      (= ch \') (read-wrapping rdr 'quote "quote")
+      (= ch \`) (read-wrapping rdr 'backquote "backquote")
       (= ch \,) (read-unquote rdr)
       (= ch \?) (read-char-literal rdr)
       :else     (do (unread-ch rdr ch) (read-token rdr)))))
@@ -169,7 +155,16 @@
 (def ^:dynamic *loading* nil)   ;; atom #{symbol} — circular require guard
 (def ^:dynamic *state* nil)     ;; atom of editor state
 
-(declare eval apply-user-fn)
+(declare eval apply-user-fn expand-backquote)
+
+;; --- Buffer helpers (needed by special forms) ---
+
+(defn- el-cur [] (get (:bufs @*state*) (:buf @*state*)))
+
+(defn- update-buf!
+  "Apply f to the current buffer in *state*."
+  [f]
+  (swap! *state* (fn [s] (update-in s [:bufs (:buf s)] f))))
 
 ;; --- Argument binding ---
 
@@ -252,29 +247,9 @@
             (swap! *vars* dissoc sym)
             (swap! *vars* assoc sym old)))))))
 
-(defn- eval-let* [args]
-  (let [[bindings & body] args
-        syms (mapv first bindings)
-        saved (into {} (map (fn [sym] [sym (get @*vars* sym ::unbound)]) syms))]
-    (doseq [b bindings]
-      (let [sym (first b) val (second b)]
-        (swap! *vars* assoc sym (eval val))))
-    (try
-      (eval-body body)
-      (finally
-        (doseq [[sym old] saved]
-          (if (= old ::unbound)
-            (swap! *vars* dissoc sym)
-            (swap! *vars* assoc sym old)))))))
-
-(defn- eval-defun [[name arglist & body]]
+(defn- eval-def* [store [name arglist & body]]
   (let [parsed (parse-arglist arglist)]
-    (swap! *fns* assoc name {:args (vec arglist) :parsed parsed :body body})
-    name))
-
-(defn- eval-defmacro [[name arglist & body]]
-  (let [parsed (parse-arglist arglist)]
-    (swap! *macros* assoc name {:args (vec arglist) :parsed parsed :body body})
+    (swap! store assoc name {:args (vec arglist) :parsed parsed :body body})
     name))
 
 (defn- eval-defvar [[name & rest-args]]
@@ -307,42 +282,31 @@
         (if v v (recur (rest forms)))))))
 
 (defn- eval-save-excursion [body]
-  (let [buf-key (:buf @*state*)
-        b (get (:bufs @*state*) buf-key)
-        saved-point (:point b)
-        saved-mark (:mark b)]
+  (let [{:keys [point mark]} (el-cur)]
     (try
       (eval-body body)
       (finally
-        (swap! *state* (fn [s]
-          (update-in s [:bufs buf-key]
-            #(assoc % :point saved-point :mark saved-mark))))))))
+        (update-buf! #(assoc % :point point :mark mark))))))
 
 ;; --- Backquote ---
+
+(defn- expand-backquote-elems
+  "Walk elements of a backquoted collection, handling splice-unquote."
+  [form]
+  (let [result (java.util.ArrayList.)]
+    (doseq [elem form]
+      (if (and (seq? elem) (= (first elem) 'splice-unquote))
+        (doseq [x (eval (second elem))] (.add result x))
+        (.add result (expand-backquote elem))))
+    (seq result)))
 
 (defn- expand-backquote
   "Process a backquote template into a value."
   [form]
   (cond
-    (and (seq? form) (= (first form) 'unquote))
-    (eval (second form))
-
-    (seq? form)
-    (let [result (java.util.ArrayList.)]
-      (doseq [elem form]
-        (if (and (seq? elem) (= (first elem) 'splice-unquote))
-          (doseq [x (eval (second elem))] (.add result x))
-          (.add result (expand-backquote elem))))
-      (apply list (seq result)))
-
-    (vector? form)
-    (let [result (java.util.ArrayList.)]
-      (doseq [elem form]
-        (if (and (seq? elem) (= (first elem) 'splice-unquote))
-          (doseq [x (eval (second elem))] (.add result x))
-          (.add result (expand-backquote elem))))
-      (vec (seq result)))
-
+    (and (seq? form) (= (first form) 'unquote)) (eval (second form))
+    (seq? form)    (apply list (expand-backquote-elems form))
+    (vector? form) (vec (expand-backquote-elems form))
     :else form))
 
 ;; --- User function / macro application ---
@@ -364,60 +328,42 @@
 
 ;; --- Buffer bridge ---
 
-(defn- el-cur [] (get (:bufs @*state*) (:buf @*state*)))
-
 (defn- el-point [] (:point (el-cur)))
 (defn- el-point-min [] 0)
 (defn- el-point-max [] (count (:text (el-cur))))
 
 (defn- el-goto-char [n]
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(assoc % :point (max 0 (min n (count (:text %))))))))
+  (update-buf! #(assoc % :point (max 0 (min n (count (:text %))))))
   n)
 
 (defn- el-forward-char [& [n]]
   (dotimes [_ (or n 1)]
-    (swap! *state* (fn [s]
-      (update-in s [:bufs (:buf s)]
-        #(buf/set-point % (fn [t p] (text/next-pos t p))))))))
+    (update-buf! #(buf/set-point % (fn [t p] (text/next-pos t p))))))
 
 (defn- el-backward-char [& [n]]
   (dotimes [_ (or n 1)]
-    (swap! *state* (fn [s]
-      (update-in s [:bufs (:buf s)]
-        #(buf/set-point % (fn [t p] (text/prev-pos t p))))))))
+    (update-buf! #(buf/set-point % (fn [t p] (text/prev-pos t p))))))
 
 (defn- el-beginning-of-line []
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(buf/set-point % text/line-start)))))
+  (update-buf! #(buf/set-point % text/line-start)))
 
 (defn- el-end-of-line []
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(buf/set-point % text/line-end)))))
+  (update-buf! #(buf/set-point % text/line-end)))
 
 (defn- el-insert [& strings]
   (doseq [s strings]
     (let [text (str s)]
-      (swap! *state* (fn [st]
-        (let [p (:point (get (:bufs st) (:buf st)))]
-          (update-in st [:bufs (:buf st)] #(buf/edit % p p text))))))))
+      (update-buf! (fn [b] (buf/edit b (:point b) (:point b) text))))))
 
 (defn- el-delete-region [from to]
   (let [lo (min from to) hi (max from to)]
-    (swap! *state* (fn [s]
-      (update-in s [:bufs (:buf s)] #(buf/edit % lo hi ""))))))
+    (update-buf! #(buf/edit % lo hi ""))))
 
 (defn- el-delete-char [& [n]]
   (dotimes [_ (or n 1)]
-    (swap! *state* (fn [s]
-      (let [b (get (:bufs s) (:buf s))
-            p (:point b) t (:text b)]
-        (if (< p (count t))
-          (update-in s [:bufs (:buf s)] #(buf/edit % p (text/next-pos t p) ""))
-          s))))))
+    (update-buf! (fn [b]
+      (let [p (:point b) t (:text b)]
+        (if (< p (count t)) (buf/edit b p (text/next-pos t p) "") b))))))
 
 (defn- el-buffer-string []
   (str (:text (el-cur))))
@@ -559,7 +505,7 @@
       (apply-user-fn macro (rest form)))
     form))
 
-;; --- Resolve function by symbol ---
+;; --- Resolve and call functions ---
 
 (declare builtins)
 
@@ -567,6 +513,14 @@
   (or (get @*fns* sym)
       (get builtins sym)
       (err (str "Void function: " sym))))
+
+(defn- call-fn
+  "Resolve f (symbol, lambda map, or builtin) and call with args."
+  [f args]
+  (let [actual-f (if (symbol? f) (resolve-fn f) f)]
+    (if (map? actual-f)
+      (apply-user-fn actual-f (vec args))
+      (clojure.core/apply actual-f args))))
 
 ;; --- Built-in function table ---
 
@@ -610,22 +564,9 @@
    'intern   symbol
    ;; higher-order
    'apply    (fn [f & args]
-               (let [actual-f (cond (symbol? f) (resolve-fn f)
-                                    :else f)
-                     all-args (vec (if (seq args) (concat (butlast args) (last args)) ()))]
-                 (if (map? actual-f)
-                   (apply-user-fn actual-f all-args)
-                   (clojure.core/apply actual-f all-args))))
-   'funcall  (fn [f & args]
-               (let [actual-f (cond (symbol? f) (resolve-fn f)
-                                    :else f)]
-                 (if (map? actual-f)
-                   (apply-user-fn actual-f (vec args))
-                   (clojure.core/apply actual-f args))))
-   'mapcar   (fn [f lst]
-               (let [actual-f (cond (symbol? f) (resolve-fn f) :else f)]
-                 (apply list (map (fn [x]
-                   (if (map? actual-f) (apply-user-fn actual-f [x]) (actual-f x))) lst))))
+               (call-fn f (if (seq args) (concat (butlast args) (last args)) ())))
+   'funcall  (fn [f & args] (call-fn f args))
+   'mapcar   (fn [f lst] (apply list (map #(call-fn f [%]) lst)))
    ;; error
    'error    (fn [fmt & args]
                (err (if (seq args) (clojure.core/apply format fmt args) (str fmt))))
@@ -689,8 +630,7 @@
     (seq? form)
     (let [[head & args] form]
       (cond
-        ;; special forms that case can't handle
-        (= head let*-sym) (eval-let* args)
+        (= head let*-sym) (eval-let args)
 
         :else
         (case head
@@ -701,8 +641,8 @@
           progn           (eval-body args)
           setq            (eval-setq args)
           let             (eval-let args)
-          defun           (eval-defun args)
-          defmacro        (eval-defmacro args)
+          defun           (eval-def* *fns* args)
+          defmacro        (eval-def* *macros* args)
           defvar          (eval-defvar args)
           defcustom       (eval-defvar args)
           lambda          {:args (vec (first args)) :parsed (parse-arglist (first args)) :body (rest args)}

@@ -60,9 +60,9 @@
 
 (defn self-insert [s]
   (let [k (:last-key s) p (:point (cur s))]
-    (cond (char? k)   (edit s p p (str k))
-          (string? k) (edit s p p k)
-          :else s)))
+    (if (or (char? k) (string? k))
+      (edit s p p (str k))
+      s)))
 
 (defn insert-newline [s] (let [p (:point (cur s))] (edit s p p "\n")))
 
