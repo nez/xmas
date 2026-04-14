@@ -672,3 +672,23 @@
         s3 (ed/handle-key s2 :return)]
     (is (= "*new*" (:buf s3)))
     (is (= "" (text s3)))))
+
+;; --- Eval expression (M-:) ---
+
+(deftest eval-expression-via-binding
+  (let [s (make-state "hello" 0)
+        s1 (ed/handle-key s [:meta \:])
+        _ (is (some? (:mini s1)))
+        s2 (reduce #(ed/handle-key %1 %2) s1 (seq "(+ 1 2)"))
+        s3 (ed/handle-key s2 :return)]
+    (is (= "3" (:msg s3)))))
+
+;; --- Elisp keybindings dispatch ---
+
+(deftest el-bindings-dispatch
+  ;; Simulate what init.el loading does: register a binding in :el-bindings
+  (let [called (atom false)
+        s (-> (make-state "abc" 0)
+              (assoc :el-bindings {[:ctrl \t] (fn [s] (reset! called true) s)}))
+        s' (ed/handle-key s [:ctrl \t])]
+    (is @called)))

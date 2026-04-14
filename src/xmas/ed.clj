@@ -1,6 +1,7 @@
 (ns xmas.ed
   (:require [clojure.string :as str]
             [xmas.buf :as buf]
+            [xmas.el :as el]
             [xmas.gap :as gap]
             [xmas.term :as t]
             [xmas.text :as text]
@@ -304,6 +305,15 @@
     (string? key)       (isearch-append s key)
     :else               (-> (isearch-accept s) (handle-key key))))
 
+;; --- Eval expression (M-:) ---
+
+(defn- eval-expression [s input]
+  (try
+    (let [result (el/eval-1 input editor)]
+      (msg s (pr-str result)))
+    (catch Exception e
+      (msg s (str "Eval error: " (.getMessage e))))))
+
 ;; --- Bindings ---
 
 (def bindings
@@ -317,6 +327,7 @@
    :page-down scroll-down, :page-up scroll-up
    [:ctrl \v] scroll-down, [:meta \v] scroll-up
    [:meta \g] (fn [s] (mini-start s "Goto line: " goto-line))
+   [:meta \:] (fn [s] (mini-start s "Eval: " eval-expression))
    :return insert-newline
    [:ctrl \d] delete-char, :backspace delete-backward-char
    [:ctrl \k] kill-line, [:ctrl \w] kill-region
@@ -367,7 +378,8 @@
 
       ;; normal dispatch
       :else
-      (let [binding (get bindings key)]
+      (let [binding (or (get bindings key)
+                        (get (:el-bindings s) key))]
         (cond
           (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
           (fn? binding)  (binding s)
@@ -413,6 +425,11 @@
                      (when (.exists (java.io.File. p)) p))]
         (try (load-file f)
              (catch Exception e (swap! editor msg (str "Init: " (.getMessage e))))))
+      (when-let [f (let [p (str (System/getProperty "user.home") "/.xmas/init.el")]
+                     (when (.exists (java.io.File. p)) p))]
+        (try (el/eval-string (slurp f) editor)
+             (log/log "loaded init.el")
+             (catch Exception e (swap! editor msg (str "Init.el: " (.getMessage e))))))
       ;; Redirect stdout/stderr so nREPL output doesn't corrupt the terminal
       (let [null-out (java.io.PrintStream. (java.io.OutputStream/nullOutputStream))]
         (System/setOut null-out)
