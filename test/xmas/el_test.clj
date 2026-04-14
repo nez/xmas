@@ -586,6 +586,10 @@
 (deftest eval-backquote-empty-splice
   (is (= '(a c) (ev "(progn (setq xs nil) `(a ,@xs c))"))))
 
+(deftest eval-backquote-splice-non-list
+  (is (thrown? clojure.lang.ExceptionInfo
+        (ev "(progn (setq x 5) `(a ,@x c))"))))
+
 (deftest eval-backquote-vector
   (is (= [1 2 3] (ev "(progn (setq x 2) `[1 ,x 3])"))))
 
@@ -623,10 +627,21 @@
 (deftest eval-defcustom
   (is (= 4 (ev "(progn (defcustom my-indent 4 \"Indent width\") my-indent)"))))
 
-;; --- let* ---
+;; --- let vs let* ---
+
+(deftest eval-let-parallel-binding
+  ;; In let, init-forms are evaluated before any binding happens,
+  ;; so (b a) should fail because a is not yet bound
+  (is (thrown? clojure.lang.ExceptionInfo
+        (ev "(let ((a 1) (b a)) b)"))))
 
 (deftest eval-let*-sequential
+  ;; In let*, each binding sees previous ones
   (is (= 3 (ev "(let* ((a 1) (b (+ a 2))) b)"))))
+
+(deftest eval-let*-sequential-refs
+  ;; let* allows referencing earlier bindings
+  (is (= 1 (ev "(let* ((a 1) (b a)) b)"))))
 
 (deftest eval-let*-restores
   (is (= 99 (ev "(progn (setq x 99) (let* ((x 1) (y (+ x 1))) y) x)"))))

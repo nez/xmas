@@ -233,9 +233,25 @@
 
 (defn- eval-let [args]
   (let [[bindings & body] args
+        ;; Evaluate all init-forms BEFORE binding (parallel let semantics)
+        evaled (mapv (fn [b] [(first b) (eval (second b))]) bindings)
+        saved (into {} (map (fn [[sym _]] [sym (get @*vars* sym ::unbound)]) evaled))]
+    (doseq [[sym val] evaled]
+      (swap! *vars* assoc sym val))
+    (try
+      (eval-body body)
+      (finally
+        (doseq [[sym old] saved]
+          (if (= old ::unbound)
+            (swap! *vars* dissoc sym)
+            (swap! *vars* assoc sym old)))))))
+
+(defn- eval-let* [args]
+  (let [[bindings & body] args
         saved (into {} (map (fn [b] (let [sym (first b)]
                                       [sym (get @*vars* sym ::unbound)]))
                             bindings))]
+    ;; Bind sequentially (each binding sees previous ones)
     (doseq [b bindings]
       (let [sym (first b) val (second b)]
         (swap! *vars* assoc sym (eval val))))
@@ -296,7 +312,10 @@
   (let [result (java.util.ArrayList.)]
     (doseq [elem form]
       (if (and (seq? elem) (= (first elem) 'splice-unquote))
-        (doseq [x (eval (second elem))] (.add result x))
+        (let [v (eval (second elem))]
+          (when (and v (not (or (seq? v) (sequential? v))))
+            (err (str "Attempt to splice non-list: " (pr-str v))))
+          (doseq [x v] (.add result x)))
         (.add result (expand-backquote elem))))
     (seq result)))
 
@@ -630,7 +649,7 @@
     (seq? form)
     (let [[head & args] form]
       (cond
-        (= head let*-sym) (eval-let args)
+        (= head let*-sym) (eval-let* args)
 
         :else
         (case head
