@@ -342,7 +342,7 @@
                 (if (or (contains? (buf-locals) sym)
                         (contains? @*buffer-local-syms* sym))
                   (update-buf! #(assoc-in % [:locals sym] v))
-                  (swap! *vars* assoc sym v)))
+                  (el-var! sym v)))
               v))
           nil (partition 2 args)))
 
@@ -384,7 +384,7 @@
                     (second rest-args))]
     (when (and (seq rest-args)
                (or always? (not (contains? @*vars* name))))
-      (swap! *vars* assoc name (eval (first rest-args))))
+      (el-var! name (eval (first rest-args))))
     (when docstring
       (swap! *docs* assoc name docstring))
     name))
@@ -408,6 +408,11 @@
       (eval-body body)
       (finally
         (update-buf! #(assoc % :point point :mark mark))))))
+
+(defn- eval-save-current-buffer [body]
+  (let [buf (:buf @*state*)]
+    (try (eval-body body)
+         (finally (swap! *state* assoc :buf buf)))))
 
 ;; --- Backquote ---
 
@@ -608,10 +613,7 @@
   (some (fn [[k v]] (when (= k prop) v)) (partition 2 plist)))
 
 (defn- el-plist-put [plist prop val]
-  (let [pairs (partition 2 plist)
-        found (some #(= (first %) prop) pairs)]
-    (apply list (mapcat (fn [[k v]] [k (if (= k prop) val v)])
-                        (if found pairs (concat pairs [[prop val]]))))))
+  (apply list (mapcat identity (assoc (apply array-map plist) prop val))))
 
 ;; --- Buffer-local variables ---
 
@@ -806,9 +808,8 @@
                   props props)))))))
 
 (defn- el-propertize [string & props]
-  (let [pmap (apply hash-map props)]
-    (swap! *vars* assoc :xmas/propertize-props pmap)
-    string))
+  (el-var! :xmas/propertize-props (apply hash-map props))
+  string)
 
 (defn- el-text-properties-at [pos]
   (when-let [pmap (props-at (:props (el-cur)) pos)]
@@ -1031,9 +1032,10 @@
     (= obj true)   "t"
     (= obj false)  "nil"
     (string? obj)   (str "\"" (-> ^String obj (.replace "\\" "\\\\") (.replace "\"" "\\\"")
-                                  (.replace "\n" "\\n") (.replace "\t" "\\t")) "\"")
+                                  (.replace "\n" "\\n") (.replace "\r" "\\r") (.replace "\t" "\\t")) "\"")
     (symbol? obj)   (name obj)
-    (char? obj)     (str "?" obj)
+    (char? obj)     (case obj \newline "?\\n" \tab "?\\t" \return "?\\r"
+                              \space "?\\s" \\ "?\\\\" (str "?" obj))
     (instance? DottedPair obj) (str "(" (el-prin1-to-string (.head ^DottedPair obj))
                                     " . " (el-prin1-to-string (.tail ^DottedPair obj)) ")")
     (vector? obj)   (str "[" (str/join " " (map el-prin1-to-string obj)) "]")
@@ -1064,12 +1066,11 @@
 (defn- el-line-pos [f] (f (:text (el-cur)) (el-point)))
 (defn- el-forward-line [& [n]]
   (let [n (or n 1)
-        step (if (pos? n)
-               #(let [eol (text/line-end (:text %) (:point %))]
-                  (assoc % :point (min (inc eol) (count (:text %)))))
-               #(let [ls (text/line-start (:text %) (:point %))]
-                  (assoc % :point (max 0 (dec ls)))))]
-    (dotimes [_ (Math/abs (int n))] (update-buf! step))
+        step-fn (if (pos? n)
+                  #(inc (text/line-end %1 %2))
+                  #(dec (text/line-start %1 %2)))]
+    (dotimes [_ (Math/abs (int n))]
+      (update-buf! #(buf/set-point % step-fn)))
     0))
 
 ;; Buffer management helpers
@@ -1169,7 +1170,7 @@
 ;; --- Data-driven stubs ---
 
 (def ^:private noop-syms
-  '[bool-vector-p char-table-p bufferp markerp recordp
+  '[bool-vector-p char-table-p markerp recordp
     file-attributes find-file-name-handler setenv special-variable-p
     backtrace-frame--internal mapbacktrace ding minibufferp])
 
@@ -1631,14 +1632,18 @@
    'intern-soft    (fn [name & _] (let [s (symbol (str name))]
                                               (when (or (contains? @*vars* s)
                                                         (contains? @*fns* s)) s)))
-   'mapatoms    (fn [f & _] (doseq [sym (keys @*vars*)] (call-fn f [sym])))
+   'mapatoms    (fn [f & _]
+                  (doseq [sym (distinct (concat (keys @*vars*) (keys @*fns*) (keys @*macros*)))]
+                    (call-fn f [sym])))
    'recursion-depth (constantly 0)
    ;; --- commonly needed by .el files ---
-   'add-to-list (fn [sym elem & _]
-                            (let [lst (let [v (var-lookup sym)] (if (= v ::not-found) nil v))]
+   'bufferp     el-buffer-live-p
+   'add-to-list (fn [sym elem & [append]]
+                            (let [v (var-lookup sym)
+                                  lst (if (= v ::not-found) nil v)]
                               (when-not (some #(= elem %) lst)
-                                (swap! *vars* assoc sym (clojure.core/cons elem lst))))
-                            elem)
+                                (el-var! sym (if append (concat lst [elem]) (clojure.core/cons elem lst))))
+                              elem))
    'y-or-n-p     (fn [prompt] (mini-read (str prompt "(y or n) ")))
    'yes-or-no-p  (fn [prompt] (mini-read (str prompt "(yes or no) ")))
    'key-description (fn [keys & _] (str/join " " (map str keys)))
@@ -1731,15 +1736,12 @@
                           (if (and (seq? arg) (= (first arg) 'lambda))
                             (eval arg)
                             (resolve-fn arg)))
-        save-current-buffer (let [buf (:buf @*state*)]
-                              (try (eval-body args)
-                                   (finally (swap! *state* assoc :buf buf))))
+        save-current-buffer (eval-save-current-buffer args)
         (save-restriction eval-when-compile eval-and-compile) (eval-body args)
         declare-function nil
         defvaralias (let [[new old] args
                           v (var-lookup old)]
-                      (when-not (= v ::not-found)
-                        (swap! *vars* assoc new v))
+                      (when-not (= v ::not-found) (el-var! new v))
                       new)
         ;; let* (can't appear in case — Clojure special form) + function call
         (cond

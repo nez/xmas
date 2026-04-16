@@ -30,7 +30,7 @@
 (defn beginning-of-line [s] (set-point s text/line-start))
 (defn end-of-line [s]       (set-point s text/line-end))
 (defn beginning-of-buffer [s] (set-point s (constantly 0)))
-(defn end-of-buffer [s]       (set-point s (fn [t _] (count t))))
+(defn end-of-buffer [s]       (set-point s (constantly Integer/MAX_VALUE)))
 
 (defn next-line [s]
   (set-point s (fn [t p]
@@ -175,13 +175,16 @@
                        :history-idx -1 :completer completer})
          (assoc :buf mb)))))
 
+(defn- push-history [h input]
+  (let [h (or h [])]
+    (cond-> h (and (seq input) (not= input (peek h))) (conj input))))
+
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
     (let [input (:text (cur s))]
       (-> s
           (assoc :buf prev-buf :mini nil)
-          (update :mini-history (fn [h] (let [h (or h [])]
-                                              (cond-> h (and (seq input) (not= input (peek h))) (conj input)))))
+          (update :mini-history push-history input)
           (on-done input)))
     s))
 
