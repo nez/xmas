@@ -1155,6 +1155,13 @@
   (fn [x] (if (char? x) (char (char-fn (int x))) (str-fn (str x)))))
 (defn- sys-prop [k] (fn [& _] (System/getProperty k)))
 (defn- div-opt ^double [x d] (if d (/ (double x) (double d)) (double x)))
+(defn- div-int [math-fn] (fn [x & [d]] (long (math-fn (div-opt x d)))))
+(defmacro ^:private math1
+  "Map of Elisp symbols to one-arg java.lang.Math methods of the same name.
+   Args are keywords: (math1 :sqrt :sin) -> {'sqrt #(Math/sqrt %) 'sin #(Math/sin %)}."
+  [& kws]
+  (into {} (for [k kws :let [s (name k)]]
+             [`(quote ~(symbol s)) `(fn [x#] (~(symbol "Math" s) (double x#)))])))
 (defn- el-bol-pos    [& _] (el-line-pos text/line-start))
 (defn- el-eol-pos    [& _] (el-line-pos text/line-end))
 (defn- el-switch-to  [buf & _] (el-set-buffer (str buf)))
@@ -1189,6 +1196,8 @@
     (zipmap noop-syms (repeat noop))
     (zipmap stub-t-syms (repeat stub-t))
     (zipmap identity-syms (repeat identity))
+    (math1 :sqrt :sin :cos :tan :asin :acos :exp)
+    {'ffloor #(Math/floor (double %)) 'fceiling #(Math/ceil (double %))}
   {;; arithmetic
    '+       +,       '-       -,       '*       *
    '/       /,       'mod     mod
@@ -1387,24 +1396,15 @@
    'max       max
    'min       min
    'float     double
-   'floor     (fn [x & [d]] (long (Math/floor (div-opt x d))))
-   'ceiling   (fn [x & [d]] (long (Math/ceil  (div-opt x d))))
+   'floor     (div-int #(Math/floor %))
+   'ceiling   (div-int #(Math/ceil %))
+   'truncate  (div-int identity)
    'round     (fn [x & [d]] (Math/round (div-opt x d)))
-   'truncate  (fn [x & [d]] (long (div-opt x d)))
    'expt      (fn [a b] (Math/pow a b))
-   'sqrt      (fn [x] (Math/sqrt x))
-   'sin       (fn [x] (Math/sin x))
-   'cos       (fn [x] (Math/cos x))
-   'tan       (fn [x] (Math/tan x))
-   'asin      (fn [x] (Math/asin x))
-   'acos      (fn [x] (Math/acos x))
    'atan      (fn [x & [y]] (if y (Math/atan2 x y) (Math/atan x)))
-   'exp       (fn [x] (Math/exp x))
    'log       (fn [x & [base]] (if base (/ (Math/log x) (Math/log base)) (Math/log x)))
    'random    (fn [& [n]] (if n (rand-int n) (rand-int Integer/MAX_VALUE)))
    'isnan     (fn [x] (Double/isNaN (double x)))
-   'ffloor    (fn [x] (Math/floor x))
-   'fceiling  (fn [x] (Math/ceil x))
    'fround    (fn [x] (Math/rint x))
    'ftruncate (fn [x] (double (long x)))
    'copysign  (fn [x y] (Math/copySign (double x) (double y)))
