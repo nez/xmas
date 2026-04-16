@@ -379,14 +379,18 @@
                               interactive (assoc :interactive interactive)))
     name))
 
-(defn- eval-defvar [[name & rest-args]]
+(defn- eval-defvar* [[name & rest-args] always?]
   (let [docstring (when (and (next rest-args) (string? (second rest-args)))
                     (second rest-args))]
-    (when (and (seq rest-args) (not (contains? @*vars* name)))
+    (when (and (seq rest-args)
+               (or always? (not (contains? @*vars* name))))
       (swap! *vars* assoc name (eval (first rest-args))))
     (when docstring
       (swap! *docs* assoc name docstring))
     name))
+
+(defn- eval-defvar [args] (eval-defvar* args false))
+(defn- eval-defconst [args] (eval-defvar* args true))
 
 (defn- eval-while [[test & body]]
   (while (eval test)
@@ -747,18 +751,17 @@
 
 (defn- el-re-search [direction regexp & [bound]]
   (let [b (el-cur) t (:text b) p (:point b)
-        [region start] (if (= direction :forward)
-                         [(subs t p (min (count t) (or bound (count t)))) p]
-                         [(subs t 0 (min (count t) (or bound p))) 0])
-        jpat (emacs->java-regex regexp)
-        m (.matcher (Pattern/compile jpat) region)]
-    (when (if (= direction :forward) (.find m) (.find m))
-      (let [last-start (if (= direction :backward)
+        backward? (= direction :backward)
+        [region start] (if backward?
+                         [(subs t (min (count t) (or bound 0)) p) (min (count t) (or bound 0))]
+                         [(subs t p (min (count t) (or bound (count t)))) p])
+        m (.matcher (Pattern/compile (emacs->java-regex regexp)) region)]
+    (when (.find m)
+      (let [last-start (if backward?
                          (loop [s (.start m)]
                            (if (.find m) (recur (.start m)) s))
                          (.start m))]
-        (when (= direction :backward)
-          (.find (.reset m) (int last-start)))
+        (when backward? (.find (.reset m) (int last-start)))
         (save-match-data! m start)
         (el-goto-char (+ start (.end m 0)))
         (+ start (.start m 0))))))
@@ -1128,7 +1131,7 @@
 (defn- el-mapc [f lst] (doseq [x lst] (call-fn f [x])) lst)
 (defn- el-mapcan [f lst] (apply list (mapcat #(call-fn f [%]) lst)))
 (defn- el-mapconcat [f lst sep]
-  (apply str (interpose (str sep) (map #(str (call-fn f [%])) lst))))
+  (str/join (str sep) (map #(str (call-fn f [%])) lst)))
 
 ;; Catch/throw
 (defn- eval-catch [[tag-form & body]]
@@ -1385,7 +1388,7 @@
    'float     double
    'floor     (fn [x & [d]] (long (Math/floor (div-opt x d))))
    'ceiling   (fn [x & [d]] (long (Math/ceil  (div-opt x d))))
-   'round     (fn [x & [d]] (Math/round (double (div-opt x d))))
+   'round     (fn [x & [d]] (Math/round (div-opt x d)))
    'truncate  (fn [x & [d]] (long (div-opt x d)))
    'expt      (fn [a b] (Math/pow a b))
    'sqrt      (fn [x] (Math/sqrt x))
@@ -1723,11 +1726,7 @@
         condition-case  (eval-condition-case args)
         unwind-protect  (eval-unwind-protect args)
         catch           (eval-catch args)
-        defconst        (let [[name & rest-args] args]
-                          (swap! *vars* assoc name (when (seq rest-args) (eval (first rest-args))))
-                          (when (and (next rest-args) (string? (second rest-args)))
-                            (swap! *docs* assoc name (second rest-args)))
-                          name)
+        defconst        (eval-defconst args)
         function        (let [arg (first args)]
                           (if (and (seq? arg) (= (first arg) 'lambda))
                             (eval arg)

@@ -35,7 +35,7 @@
 
 (def ^InputStream stdin System/in)
 
-(defn byte-available? [] (> (.available stdin) 0))
+(defn byte-available? [] (pos? (.available stdin)))
 
 (defn read-byte-timeout ^long [^long ms]
   (let [deadline (+ (System/currentTimeMillis) ms)]
@@ -70,7 +70,7 @@
   (loop [params ""]
     (let [b (read-byte-timeout 50)]
       (cond
-        (< b 0) nil
+        (neg? b) nil
         (<= 64 b 126)
         (case (char b)
           \A :up, \B :down, \C :right, \D :left, \H :home, \F :end
@@ -81,10 +81,10 @@
 (defn- parse-escape []
   (let [b (read-byte-timeout 50)]
     (cond
-      (< b 0)   :escape
+      (neg? b)   :escape
       (= b 91)  (parse-csi)
       (= b 79)  (let [b2 (read-byte-timeout 50)]
-                  (if (< b2 0) nil
+                  (when-not (neg? b2)
                     (case b2 80 :f1 81 :f2 82 :f3 83 :f4 nil)))
       (>= b 32) [:meta (char b)]
       (< b 27)  [:meta [:ctrl (char (+ b 96))]]
@@ -94,16 +94,16 @@
   "Map a leading byte to a key value."
   [^long b]
   (cond
-    (< b 0)   nil
-    (= b 27)  (parse-escape)
-    (= b 9)   :tab
-    (= b 13)  :return
-    (= b 10)  :return
-    (= b 127) :backspace
-    (< b 27)  [:ctrl (char (+ b 96))]
-    (< b 32)  nil
-    (< b 128) (char b)
-    :else     (read-utf8 b)))
+    (neg? b)  nil
+    (= b 27) (parse-escape)
+    :else (case b
+            9       :tab
+            (13 10) :return
+            127     :backspace
+            (cond (< b 27)  [:ctrl (char (+ b 96))]
+                  (< b 32)  nil
+                  (< b 128) (char b)
+                  :else     (read-utf8 b)))))
 
 (defn read-key-timeout
   "Like read-key but returns nil after ms instead of blocking forever."

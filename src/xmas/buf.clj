@@ -12,11 +12,24 @@
   ([name] (make name "" nil))
   ([name text file]
    {:name name :text text :point 0 :mark nil :file file
-    :modified false :mode :fundamental :undo [] :redo [] :hscroll 0}))
+    :modified false :mode :fundamental :undo [] :redo [] :hscroll 0
+    :locals {} :props (sorted-map)}))
 
 (defn set-point [b f]
   (assoc b :point (-> (f (:text b) (:point b))
                       (max 0) (min (count (:text b))))))
+
+(defn- shift-props
+  "Adjust property interval keys after a text edit at [from, to) replaced by repl."
+  [props from to repl-len]
+  (let [delta (- repl-len (- to from))]
+    (into (sorted-map)
+          (keep (fn [[pos pmap]]
+                  (cond
+                    (< pos from) [pos pmap]
+                    (<= pos to)  nil
+                    :else        [(+ pos delta) pmap])))
+          props)))
 
 (defn edit [b from to repl]
   (let [t (:text b)
@@ -27,6 +40,7 @@
         (assoc :modified true)
         (update :undo bounded-conj undo-limit {:from from :old old :new repl})
         (assoc :redo [])
+        (update :props shift-props from to (count repl))
         (update :point (fn [p]
           (cond (< p from) p
                 (<= p to)  (+ from (count repl))

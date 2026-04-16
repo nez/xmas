@@ -1,5 +1,6 @@
 (ns xmas.web
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [org.httpkit.server :as http]
             [xmas.term :as t]
             [xmas.view :as view]
@@ -16,10 +17,10 @@
 (defn broadcast! [_ _ old new]
   (let [ks [:bufs :buf :mini :msg]]
     (when (not= (select-keys old ks) (select-keys new ks))
-    (let [frame (render-to-string new)]
-      (doseq [ch @clients]
-        (try (http/send! ch frame)
-             (catch Exception _ (swap! clients disj ch))))))))
+      (let [frame (render-to-string new)]
+        (doseq [ch @clients]
+          (try (http/send! ch frame)
+               (catch Exception _ (swap! clients disj ch))))))))
 
 (defn- ws-handler [editor-atom handle-key-fn req]
   (http/as-channel req
@@ -43,7 +44,7 @@
       (ws-handler editor-atom handle-key-fn req)
       {:status 200
        :headers {"Content-Type" "text/html"}
-       :body (slurp (clojure.java.io/resource "xmas/client.html"))})))
+       :body (slurp (io/resource "xmas/client.html"))})))
 
 (defn start! [editor-atom port handle-key-fn]
   (add-watch editor-atom :web broadcast!)

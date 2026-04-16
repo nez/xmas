@@ -78,20 +78,94 @@
     result))
 
 (defun assq (key alist)
-  (let ((result nil))
-    (while (and alist (not result))
-      (if (and (consp (car alist)) (equal key (car (car alist))))
-        (setq result (car alist))
-        (setq alist (cdr alist))))
-    result))
+  (assoc key alist))
 
 ;; --- Utility ---
 
 (defun nthcdr (n list)
-  (let ((i 0))
-    (while (< i n)
-      (setq list (cdr list))
-      (setq i (1+ i)))
-    list))
+  (dotimes (_ n)
+    (setq list (cdr list)))
+  list)
+
+;; error handling
+
+(defmacro ignore-errors (&rest body)
+  `(condition-case nil (progn ,@body) (error nil)))
+
+;; buffer-local convenience
+
+(defmacro setq-local (sym val)
+  `(progn (make-local-variable ',sym) (setq ,sym ,val)))
+
+;; minor mode infrastructure
+
+(defmacro define-minor-mode (name docstring &rest args)
+  (let ((hook-name (intern (concat (symbol-name name) "-hook")))
+        (map-name  (intern (concat (symbol-name name) "-map")))
+        (keymap-expr nil)
+        (body args))
+    ;; Parse :keymap keyword arg
+    (when (and args (equal (car args) :keymap))
+      (setq keymap-expr (car (cdr args)))
+      (setq body (cdr (cdr args))))
+    `(progn
+       (defvar ,name nil ,docstring)
+       (defvar ,hook-name nil)
+       (defvar ,map-name ,(or keymap-expr '(make-sparse-keymap)))
+       (defun ,name (&optional arg)
+         (interactive)
+         ,docstring
+         (setq ,name (if arg (> arg 0) (not ,name)))
+         (if ,name
+           (progn (use-local-map ,map-name) ,@body)
+           (use-local-map nil))
+         (run-hooks ',hook-name)
+         ,name))))
+
+;; --- buffer macros ---
+
+(defmacro with-current-buffer (buf &rest body)
+  `(save-current-buffer (set-buffer ,buf) ,@body))
+
+(defmacro with-temp-buffer (&rest body)
+  (let ((buf (intern "--with-temp-buffer--")))
+    `(let ((,buf (get-buffer-create " *temp*")))
+       (save-current-buffer (set-buffer ,buf) (erase-buffer) ,@body))))
+
+;; --- string utilities ---
+
+(defun string-empty-p (s) (or (null s) (equal s "")))
+
+(defun string-join (strings &optional separator)
+  (mapconcat 'identity strings (or separator "")))
+
+;; --- list utilities ---
+
+(defun ensure-list (obj)
+  (if (listp obj) obj (list obj)))
+
+(defun alist-get (key alist &optional default)
+  (let ((pair (assoc key alist)))
+    (if pair (cdr pair) default)))
+
+;; --- define-derived-mode (simplified) ---
+
+(defmacro define-derived-mode (child parent name &optional docstring &rest body)
+  (let ((hook-name (intern (concat (symbol-name child) "-hook")))
+        (map-name  (intern (concat (symbol-name child) "-map"))))
+    `(progn
+       (defvar ,hook-name nil)
+       (defvar ,map-name (make-sparse-keymap))
+       ,(when parent `(set-keymap-parent ,map-name
+            (condition-case nil (symbol-value (intern (concat (symbol-name ',parent) "-map")))
+              (error nil))))
+       (defun ,child ()
+         ,docstring
+         (interactive)
+         (setq major-mode ',child)
+         (setq mode-name ,name)
+         (use-local-map ,map-name)
+         ,@body
+         (run-hooks ',hook-name)))))
 
 (provide 'subr)

@@ -29,7 +29,7 @@
 (defn backward-char [s] (set-point s text/prev-pos))
 (defn beginning-of-line [s] (set-point s text/line-start))
 (defn end-of-line [s]       (set-point s text/line-end))
-(defn beginning-of-buffer [s] (set-point s (fn [_ _] 0)))
+(defn beginning-of-buffer [s] (set-point s (constantly 0)))
 (defn end-of-buffer [s]       (set-point s (fn [t _] (count t))))
 
 (defn next-line [s]
@@ -47,13 +47,12 @@
         (let [pe (dec ls)]
           (text/pos-at-col t (text/line-start t pe) pe col)))))))
 
-(defn scroll-down [s]
+(defn- scroll-lines [s line-fn]
   (let [n (max 1 (- (:rows s 24) 2))]
-    (nth (iterate next-line s) n)))
+    (nth (iterate line-fn s) n)))
 
-(defn scroll-up [s]
-  (let [n (max 1 (- (:rows s 24) 2))]
-    (nth (iterate previous-line s) n)))
+(defn scroll-down [s] (scroll-lines s next-line))
+(defn scroll-up [s]   (scroll-lines s previous-line))
 
 (defn forward-word [s]  (set-point s text/word-forward))
 (defn backward-word [s] (set-point s text/word-backward))
@@ -72,7 +71,7 @@
 
 (defn delete-backward-char [s]
   (let [b (cur s) p (:point b) t (:text b)]
-    (if (> p 0) (edit s (text/prev-pos t p) p "") s)))
+    (if (pos? p) (edit s (text/prev-pos t p) p "") s)))
 
 (defn- kill-push [s text]
   (update s :kill buf/bounded-conj 60 text))
@@ -144,9 +143,10 @@
       (msg s "No file"))))
 
 (defn find-file [s filename]
-  (let [path (.getCanonicalPath (java.io.File. filename))
-        name (.getName (java.io.File. path))]
-    (if (.exists (java.io.File. path))
+  (let [canon (-> (java.io.File. filename) .getCanonicalFile)
+        path (.getPath canon)
+        name (.getName canon)]
+    (if (.exists canon)
       (try (let [raw (slurp path)
                  crlf (re-find #"\r\n" raw)
                  content (-> raw (str/replace "\r\n" "\n") (str/replace "\r" "\n"))]
@@ -156,7 +156,7 @@
            (catch Exception e
              (msg s (str "Error reading " path ": " (.getMessage e)))))
       (-> s (assoc-in [:bufs path] (buf/make name "" path)) (assoc :buf path)
-            (msg (str "(New file)"))))))
+            (msg "(New file)")))))
 
 (defn switch-buffer [s name]
   (if (get (:bufs s) name)
@@ -180,8 +180,8 @@
     (let [input (:text (cur s))]
       (-> s
           (assoc :buf prev-buf :mini nil)
-          (update :mini-history #(if (and (seq input) (not= input (peek %)))
-                                   (conj (or % []) input) (or % [])))
+          (update :mini-history (fn [h] (let [h (or h [])]
+                                              (cond-> h (and (seq input) (not= input (peek h))) (conj input)))))
           (on-done input)))
     s))
 
@@ -199,7 +199,7 @@
       (-> s (assoc-in [:mini :history-idx] new-idx)
             (set-mini-text (get hist (- (dec (count hist)) new-idx))))
 
-      (and (neg? delta) (< new-idx 0))
+      (and (neg? delta) (neg? new-idx))
       (-> s (assoc-in [:mini :history-idx] -1)
             (set-mini-text ""))
 
@@ -225,10 +225,7 @@
         {:completed (if (.isDirectory full) (str completed "/") completed)
          :candidates []})
       :else
-      (let [common (reduce (fn [a b]
-                             (apply str (map first (take-while (fn [[x y]] (= x y))
-                                                               (map vector a b)))))
-                           matches)]
+      (let [common (str/join (map first (take-while #(apply = %) (apply map vector matches))))]
         {:completed (str (.getPath parent) "/" common)
          :candidates matches}))))
 
@@ -256,11 +253,11 @@
                     (text/search-forward t pattern (min (inc p) (count t)))
                     (text/search-backward t pattern p))]
         (if found
-          (set-point s (fn [_ _] found))
+          (set-point s (constantly found))
           (msg s (str "Failing I-search: " pattern)))))))
 
 (defn isearch-start [s direction]
-  (-> s (assoc :isearch {:pattern "" :direction direction :origin (:point (cur s))})))
+  (assoc s :isearch {:pattern "" :direction direction :origin (:point (cur s))}))
 
 (defn- isearch-accept [s]
   (dissoc s :isearch))
@@ -268,7 +265,7 @@
 (defn- isearch-cancel [s]
   (let [origin (get-in s [:isearch :origin])]
     (-> s (dissoc :isearch)
-          (set-point (fn [_ _] origin))
+          (set-point (constantly origin))
           (msg "Quit"))))
 
 (defn- isearch-append [s ch]
@@ -294,7 +291,7 @@
                             (isearch-cancel s)))
     (and (char? key) (>= (int key) 32)) (isearch-append s (str key))
     (string? key)       (isearch-append s key)
-    :else               (-> (isearch-accept s) (handle-key key))))
+    :else               (handle-key (isearch-accept s) key)))
 
 ;; --- Eval expression (M-:) ---
 
@@ -346,7 +343,8 @@
   "Pure state transition. Handles prefix keys via :pending state.
    Works identically for terminal and web — one key at a time."
   [s key]
-  (let [s (assoc s :last-key key :msg nil :exit-pending nil)]
+  (let [s (assoc s :last-key key :msg nil :exit-pending nil)
+        mini-cmd (when (:mini s) (mini-bindings key))]
     (cond
       ;; pending prefix — resolve second key
       (:pending s)
@@ -361,15 +359,14 @@
       (handle-isearch s key)
 
       ;; minibuffer keys
-      (and (:mini s) (get mini-bindings key))
-      ((get mini-bindings key) s)
+      mini-cmd (mini-cmd s)
 
       ;; normal dispatch
       :else
       (let [binding (or (get bindings key)
                         (get (:el-bindings s) key))]
         (cond
-          (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
+          (map? binding) (assoc s :pending binding)
           (fn? binding)  (binding s)
           (char? key)    (if (>= (int key) 32) (self-insert s) s)
           (string? key)  (self-insert s)
@@ -385,8 +382,10 @@
               (update-in [:bufs (:buf s)] assoc :hscroll hscroll)))))
     (let [key (t/read-key-timeout 100)]
       (if (nil? key)
-        (recur)
+        (do (try (el/fire-timers! editor) (catch Exception _)) (recur))
         (do (swap! editor #(handle-key % key))
+            (try (el/run-hooks! editor 'post-command-hook)
+                 (catch Exception _))
             (when-not (:exit @editor) (recur)))))))
 
 (defn- run-all
@@ -404,7 +403,8 @@
       (swap! editor assoc :rows rows :cols cols)))
     (let [[rows cols] (t/terminal-size)]
       (reset! editor
-        {:buf "*scratch*"
+        {:self editor
+         :buf "*scratch*"
          :bufs {"*scratch*" (buf/make "*scratch*"
                   ";; xmas\n;; C-f/b/n/p move, C-x C-f open, C-x C-c quit\n\n" nil)}
          :kill [] :msg nil :mini nil :mini-history []
@@ -414,9 +414,12 @@
         (try (load-file f)
              (catch Exception e (swap! editor msg (str "Init: " (.getMessage e))))))
       ;; Load Elisp bootstrap and user init
-      (try (when-let [subr (io/resource "xmas/subr.el")]
-             (el/eval-string (slurp subr) editor))
-           (catch Exception e (log/log "subr.el:" (.getMessage e))))
+      (doseq [f ["xmas/subr.el" "xmas/cl-lib.el" "xmas/package-stubs.el"
+                  "xmas/custom-stubs.el" "xmas/use-package.el"
+                  "xmas/init-vars.el"]]
+        (try (when-let [r (io/resource f)]
+               (el/eval-string (slurp r) editor))
+             (catch Exception e (log/log (str f ":") (.getMessage e)))))
       (let [init-el (str (System/getProperty "user.home") "/.xmas/init.el")]
         (when (.exists (java.io.File. init-el))
           (try (el/eval-string (slurp init-el) editor)
