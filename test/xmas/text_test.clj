@@ -223,3 +223,7 @@
 (deftest search-backward-repeated
   (is (= 3 (text/search-backward "abcabc" "abc" 6)))
   (is (= 0 (text/search-backward "abcabc" "abc" 3))))
+
+(deftest search-backward-from-zero-is-nil
+  ;; Regression: nothing can be strictly before position 0.
+  (is (nil? (text/search-backward "abc" "a" 0))))

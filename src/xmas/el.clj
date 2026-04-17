@@ -179,22 +179,31 @@
         (swap! *vars* assoc sym v)
         (recur (rest pairs) v)))))
 
+(defn- let-binding
+  "Normalize a let binding: bare symbol binds to nil, else [sym init-form]."
+  [b]
+  (if (symbol? b) [b nil] [(first b) (second b)]))
+
+(defn- with-scope
+  "Bind syms→vals in *vars*, evaluate thunk, restore prior values on exit."
+  [syms vals thunk]
+  (let [saved (into {} (map (fn [s] [s (get @*vars* s ::unbound)]) syms))]
+    (doseq [[s v] (map vector syms vals)]
+      (swap! *vars* assoc s v))
+    (try (thunk)
+         (finally
+           (doseq [[s old] saved]
+             (if (= old ::unbound)
+               (swap! *vars* dissoc s)
+               (swap! *vars* assoc s old)))))))
+
 (defn- eval-let [args]
   (let [[bindings & body] args
-        ;; elisp let: ((sym val) (sym val) ...) — each binding is a list
-        saved (into {} (map (fn [b] (let [sym (first b)]
-                                      [sym (get @*vars* sym ::unbound)]))
-                            bindings))]
-    (doseq [b bindings]
-      (let [sym (first b) val (second b)]
-        (swap! *vars* assoc sym (eval val))))
-    (try
-      (eval-body body)
-      (finally
-        (doseq [[sym old] saved]
-          (if (= old ::unbound)
-            (swap! *vars* dissoc sym)
-            (swap! *vars* assoc sym old)))))))
+        pairs (map let-binding bindings)
+        ;; elisp `let` binds in parallel: inits see the OUTER env, not each other.
+        syms  (map first pairs)
+        vals  (mapv (fn [[_ form]] (eval form)) pairs)]
+    (with-scope syms vals #(eval-body body))))
 
 (defn- eval-defun [[name arglist & body]]
   (swap! *fns* assoc name {:args (vec arglist) :body body})
@@ -223,80 +232,60 @@
 (defn- apply-user-fn [{:keys [args body]} call-args]
   (when (not= (count args) (count call-args))
     (err (str "Wrong number of arguments: expected " (count args) ", got " (count call-args))))
-  (let [saved (into {} (map (fn [sym] [sym (get @*vars* sym ::unbound)]) args))]
-    (doseq [[sym val] (map vector args call-args)]
-      (swap! *vars* assoc sym val))
-    (try
-      (eval-body body)
-      (finally
-        (doseq [[sym old] saved]
-          (if (= old ::unbound)
-            (swap! *vars* dissoc sym)
-            (swap! *vars* assoc sym old)))))))
+  (with-scope args call-args #(eval-body body)))
 
 ;; --- Buffer bridge ---
 
-(defn- el-point [] (:point (get (:bufs @*state*) (:buf @*state*))))
+(defn- cur-buf [] (get (:bufs @*state*) (:buf @*state*)))
+(defn- update-cur! [f] (swap! *state* #(update-in % [:bufs (:buf %)] f)))
+
+(defn- el-point [] (:point (cur-buf)))
 (defn- el-point-min [] 0)
-(defn- el-point-max [] (count (:text (get (:bufs @*state*) (:buf @*state*)))))
+(defn- el-point-max [] (count (:text (cur-buf))))
 
 (defn- el-goto-char [n]
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(assoc % :point (max 0 (min n (count (:text %))))))))
+  (update-cur! #(assoc % :point (max 0 (min n (count (:text %))))))
   n)
 
-(defn- el-forward-char [& [n]]
-  (let [n (or n 1)]
-    (dotimes [_ n]
-      (swap! *state* (fn [s]
-        (update-in s [:bufs (:buf s)]
-          #(buf/set-point % (fn [t p] (text/next-pos t p)))))))))
+(defn- step-point
+  "Step point by n codepoints (negative = backward), clamped at buffer bounds."
+  [n]
+  (let [step (if (neg? n) text/prev-pos text/next-pos)]
+    (update-cur!
+      (fn [b]
+        (loop [b b i (Math/abs (long n))]
+          (if (zero? i) b
+            (recur (buf/set-point b (fn [t p] (step t p))) (dec i))))))))
 
-(defn- el-backward-char [& [n]]
-  (let [n (or n 1)]
-    (dotimes [_ n]
-      (swap! *state* (fn [s]
-        (update-in s [:bufs (:buf s)]
-          #(buf/set-point % (fn [t p] (text/prev-pos t p)))))))))
+(defn- el-forward-char  [& [n]] (step-point (long (or n 1))))
+(defn- el-backward-char [& [n]] (step-point (- (long (or n 1)))))
 
 (defn- el-beginning-of-line []
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(buf/set-point % (fn [t p] (gap/nth-line-start t (gap/line-of t p))))))))
+  (update-cur! #(buf/set-point % (fn [t p] (gap/nth-line-start t (gap/line-of t p))))))
 
 (defn- el-end-of-line []
-  (swap! *state* (fn [s]
-    (update-in s [:bufs (:buf s)]
-      #(buf/set-point % (fn [t p] (gap/nth-line-end t (gap/line-of t p))))))))
+  (update-cur! #(buf/set-point % (fn [t p] (gap/nth-line-end t (gap/line-of t p))))))
 
 (defn- el-insert [& strings]
   (doseq [s strings]
     (let [text (str s)]
-      (swap! *state* (fn [st]
-        (let [b (get (:bufs st) (:buf st))
-              p (:point b)]
-          (update-in st [:bufs (:buf st)] #(buf/edit % p p text))))))))
+      (update-cur! #(let [p (:point %)] (buf/edit % p p text))))))
 
 (defn- el-delete-region [from to]
   (let [lo (min from to) hi (max from to)]
-    (swap! *state* (fn [s]
-      (update-in s [:bufs (:buf s)] #(buf/edit % lo hi ""))))))
+    (update-cur! #(buf/edit % lo hi ""))))
 
-(defn- el-buffer-string []
-  (str (:text (get (:bufs @*state*) (:buf @*state*)))))
-
-(defn- el-buffer-name []
-  (:name (get (:bufs @*state*) (:buf @*state*))))
+(defn- el-buffer-string [] (str (:text (cur-buf))))
+(defn- el-buffer-name   [] (:name (cur-buf)))
 
 (defn- el-search-forward [pattern]
-  (let [b (get (:bufs @*state*) (:buf @*state*))
-        found (text/search-forward (:text b) pattern (inc (:point b)))]
+  (let [b (cur-buf)
+        found (text/search-forward (:text b) pattern (:point b))]
     (when found (el-goto-char (+ found (count pattern))))
     found))
 
 (defn- el-search-backward [pattern]
-  (let [b (get (:bufs @*state*) (:buf @*state*))
+  (let [b (cur-buf)
         found (text/search-backward (:text b) pattern (:point b))]
     (when found (el-goto-char found))
     found))
@@ -370,7 +359,7 @@
    'format  format
    ;; predicates
    'numberp number?,  'stringp string?
-   'listp   seq?,     'symbolp symbol?
+   'listp   (fn [x] (or (nil? x) (seq? x))), 'symbolp symbol?
    'equal   =,        'not     not
    ;; buffer
    'point             el-point
@@ -411,6 +400,9 @@
       (= form 't) true
       (contains? @*vars* form) (get @*vars* form)
       :else (err (str "Void variable: " form)))
+
+    ;; empty list — elisp `()` is `nil`
+    (and (seq? form) (empty? form)) nil
 
     ;; list (special form or function call)
     (seq? form)

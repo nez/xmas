@@ -150,7 +150,12 @@
 (defn find-file [s filename]
   (let [path (.getCanonicalPath (java.io.File. filename))
         name (or (last (str/split path #"/")) path)]
-    (if (.exists (java.io.File. path))
+    (cond
+      ;; already open — just switch to it, don't clobber in-memory edits
+      (contains? (:bufs s) path)
+      (assoc s :buf path)
+
+      (.exists (java.io.File. path))
       (try (let [raw (slurp path)
                  crlf (re-find #"\r\n" raw)
                  content (-> raw (str/replace "\r\n" "\n") (str/replace "\r" "\n"))]
@@ -159,6 +164,8 @@
                    (assoc :buf path)))
            (catch Exception e
              (msg s (str "Error reading " path ": " (.getMessage e)))))
+
+      :else
       (-> s (assoc-in [:bufs path] (buf/make name "" path)) (assoc :buf path)
             (msg "(New file)")))))
 

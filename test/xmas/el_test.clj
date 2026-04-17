@@ -543,6 +543,46 @@
 
 ;; --- Global-set-key ---
 
+;; --- Regression tests ---
+
+(deftest eval-empty-list-is-nil
+  ;; Elisp: () evaluates to nil, not a "Void function: nil" error.
+  (is (nil? (ev "()")))
+  (is (nil? (ev "(if t () 1)"))))
+
+(deftest eval-listp-nil
+  ;; Elisp: (listp nil) ⇒ t. Was returning nil because backing predicate was seq?.
+  (is (true? (ev "(listp nil)")))
+  (is (true? (ev "(listp '(1 2))")))
+  (is (not (ev "(listp 42)"))))
+
+(deftest eval-let-parallel
+  ;; Elisp `let` (not let*) binds in parallel: init forms see the OUTER env.
+  (is (= 1 (ev "(progn (setq x 1) (let ((x 2) (y x)) y))"))))
+
+(deftest eval-let-bare-symbol-binding
+  ;; Elisp: (let (x) ...) binds x to nil.
+  (is (nil? (ev "(let (x) x)")))
+  (is (= 5 (ev "(let (x y) (setq x 5) x)"))))
+
+(deftest eval-search-forward-finds-at-point
+  ;; Was starting the scan at (inc point), missing a match at point itself.
+  (let [ed (make-editor "world hello world")]
+    (el/eval-string "(search-forward \"world\")" ed)
+    (is (= 5 (:point (get (:bufs @ed) "*test*"))))))
+
+(deftest eval-forward-char-negative-moves-back
+  ;; (forward-char -1) should move backward, not no-op.
+  (let [ed (make-editor "hello")]
+    (swap! ed assoc-in [:bufs "*test*" :point] 3)
+    (el/eval-string "(forward-char -2)" ed)
+    (is (= 1 (:point (get (:bufs @ed) "*test*"))))))
+
+(deftest eval-backward-char-negative-moves-forward
+  (let [ed (make-editor "hello")]
+    (el/eval-string "(backward-char -3)" ed)
+    (is (= 3 (:point (get (:bufs @ed) "*test*"))))))
+
 (deftest eval-global-set-key
   (let [ed (make-editor "hello")]
     (el/eval-string

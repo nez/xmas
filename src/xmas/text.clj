@@ -106,7 +106,7 @@
 (defn search-backward
   "Position of pattern in t before from, or nil."
   [^CharSequence t ^String pattern ^long from]
-  (when (seq pattern)
+  (when (and (seq pattern) (pos? from))
     (let [pn    (.length pattern)
           start (min (dec from) (- (.length t) pn))]
       (loop [i (long (max 0 start))]

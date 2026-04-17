@@ -18,7 +18,8 @@
   (when (or (not= (:bufs old) (:bufs new))
             (not= (:buf old) (:buf new))
             (not= (:mini old) (:mini new))
-            (not= (:msg old) (:msg new)))
+            (not= (:msg old) (:msg new))
+            (not= (:isearch old) (:isearch new)))
     (let [frame (render-to-string new)]
       (doseq [ch @clients]
         (try (http/send! ch frame)

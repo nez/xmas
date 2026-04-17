@@ -494,6 +494,21 @@
 
 ;; --- Find file edge cases ---
 
+(deftest find-file-reuses-existing-buffer
+  ;; Regression: re-opening a file used to clobber in-memory edits with a fresh slurp.
+  (let [f (java.io.File/createTempFile "xmas-reopen" ".txt")]
+    (try
+      (spit f "original")
+      (let [path (.getAbsolutePath f)
+            s1  (ed/find-file (make-state "" 0) path)
+            ;; mutate the buffer in memory without saving
+            s2  (ed/edit s1 0 0 "EDITED ")
+            ;; re-run find-file on same path — should NOT clobber
+            s3  (ed/find-file s2 path)]
+        (is (= "EDITED original" (text s3)))
+        (is (= (:buf s2) (:buf s3))))
+      (finally (.delete f)))))
+
 (deftest find-file-new-file
   (let [path (str (System/getProperty "java.io.tmpdir") "/xmas-nonexistent-" (System/nanoTime) ".txt")
         s' (ed/find-file (make-state "" 0) path)]

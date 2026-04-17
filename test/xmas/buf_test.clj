@@ -128,6 +128,31 @@
         re-edited (buf/edit undone 3 3 "x")]
     (is (empty? (:redo re-edited)))))
 
+(deftest redo-then-undo-restores
+  ;; Regression: redo pushed the wrong shape onto :undo, corrupting text
+  ;; when the user pressed undo after a redo.
+  (let [b   (buf/make "t" "hello" nil)
+        e1  (buf/edit b 0 5 "X")          ;; "X"
+        u1  (buf/undo e1)                  ;; "hello"
+        r1  (buf/redo u1)                  ;; "X"
+        u2  (buf/undo r1)]                 ;; should be back to "hello"
+    (is (= "X" (str (:text r1))))
+    (is (= "hello" (str (:text u2))))))
+
+(deftest redo-then-undo-roundtrips-many
+  (let [b  (buf/make "t" "abc" nil)
+        b1 (buf/edit b 3 3 "d")
+        b2 (buf/edit b1 4 4 "e")
+        u1 (buf/undo b2)
+        u2 (buf/undo u1)
+        r1 (buf/redo u2)
+        r2 (buf/redo r1)
+        u3 (buf/undo r2)
+        u4 (buf/undo u3)]
+    (is (= "abcde" (str (:text r2))))
+    (is (= "abcd"  (str (:text u3))))
+    (is (= "abc"   (str (:text u4))))))
+
 ;; --- Undo limit ---
 
 (deftest undo-limit-caps-history
