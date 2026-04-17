@@ -164,17 +164,11 @@
   (inc (alength (.-lidx gb))))
 
 (defn line-of
-  "Zero-based line number containing pos (O(log n) binary search)."
+  "Zero-based line number containing pos. Returns the first lidx index i
+   where lidx[i] >= pos (O(log n) via `Arrays/binarySearch`)."
   ^long [^GapBuffer gb ^long pos]
-  (let [arr (.-lidx gb)
-        n   (alength arr)]
-    (loop [lo 0 hi n]
-      (if (>= lo hi)
-        (long lo)
-        (let [mid (unsigned-bit-shift-right (+ lo hi) 1)]
-          (if (< (aget arr (int mid)) pos)
-            (recur (inc mid) hi)
-            (recur lo mid)))))))
+  (let [i (java.util.Arrays/binarySearch (.-lidx gb) (int pos))]
+    (if (neg? i) (- (- i) 1) i)))
 
 (defn nth-line-start
   "Start position of zero-based line n."
@@ -190,3 +184,13 @@
     (if (< n nl)
       (long (aget arr (int n)))
       (long (count gb)))))
+
+(defn line-start
+  "Start of line containing logical position pos."
+  ^long [^GapBuffer gb ^long pos]
+  (nth-line-start gb (line-of gb pos)))
+
+(defn line-end
+  "End of line containing logical position pos."
+  ^long [^GapBuffer gb ^long pos]
+  (nth-line-end gb (line-of gb pos)))

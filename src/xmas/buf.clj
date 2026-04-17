@@ -3,6 +3,12 @@
 
 (def undo-limit 1000)
 
+(defn bounded-conj
+  "conj v onto vec, dropping the oldest entry once size exceeds limit."
+  [vec limit v]
+  (let [c (conj vec v)]
+    (if (> (count c) limit) (subvec c 1) c)))
+
 (defn make
   ([name] (make name "" nil))
   ([name text file]
@@ -20,33 +26,26 @@
     (-> b
         (assoc :text (gap/edit t from to repl))
         (assoc :modified true)
-        (update :undo #(let [u (conj % {:from from :old old :new repl})]
-                          (if (> (count u) undo-limit) (subvec u 1) u)))
+        (update :undo bounded-conj undo-limit {:from from :old old :new repl})
         (assoc :redo [])
         (update :point (fn [p]
           (cond (< p from) p
                 (<= p to)  (+ from (count repl))
                 :else      (+ p delta)))))))
 
-(defn- cap [v]
-  (if (> (count v) undo-limit) (subvec v 1) v))
-
-(defn undo [b]
-  (if-let [{:keys [from old new]} (peek (:undo b))]
-    (let [to (+ from (count new))]
+(defn- replay
+  "Pop the latest entry from src-key, swap its `gone` text for its `kept` text,
+   move point to the tail of the kept text, and push the entry onto dst-key."
+  [b src-key dst-key gone-key kept-key]
+  (if-let [{:keys [from] :as entry} (peek (get b src-key))]
+    (let [to   (+ from (count (gone-key entry)))
+          kept (kept-key entry)]
       (-> b
-          (assoc :text (gap/edit (:text b) from to old))
-          (update :undo pop)
-          (update :redo #(cap (conj % {:from from :old old :new new})))
-          (assoc :point (+ from (count old)))))
+          (assoc :text (gap/edit (:text b) from to kept))
+          (update src-key pop)
+          (update dst-key bounded-conj undo-limit entry)
+          (assoc :point (+ from (count kept)))))
     b))
 
-(defn redo [b]
-  (if-let [{:keys [from old new]} (peek (:redo b))]
-    (let [to (+ from (count old))]
-      (-> b
-          (assoc :text (gap/edit (:text b) from to new))
-          (update :redo pop)
-          (update :undo #(cap (conj % {:from from :old old :new new})))
-          (assoc :point (+ from (count new)))))
-    b))
+(defn undo [b] (replay b :undo :redo :new :old))
+(defn redo [b] (replay b :redo :undo :old :new))

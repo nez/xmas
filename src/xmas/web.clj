@@ -14,12 +14,10 @@
       (view/render s))
     (str sb)))
 
+(def ^:private broadcast-keys [:bufs :buf :mini :msg :isearch])
+
 (defn broadcast! [_ _ old new]
-  (when (or (not= (:bufs old) (:bufs new))
-            (not= (:buf old) (:buf new))
-            (not= (:mini old) (:mini new))
-            (not= (:msg old) (:msg new))
-            (not= (:isearch old) (:isearch new)))
+  (when (some #(not= (% old) (% new)) broadcast-keys)
     (let [frame (render-to-string new)]
       (doseq [ch @clients]
         (try (http/send! ch frame)

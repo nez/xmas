@@ -15,7 +15,7 @@
    {:buf "*test*"
     :bufs {"*test*" (assoc (buf/make "*test*" text nil) :point point)}
     :kill [] :msg nil :mini nil
-    :scroll 0 :rows 24 :cols 80 :last-key nil}))
+    :scroll 0 :rows 24 :cols 80}))
 
 (defn point [s] (:point (ed/cur s)))
 (defn text [s] (str (:text (ed/cur s))))
@@ -47,7 +47,7 @@
   (prop/for-all [state spec/gen-editor
                  ch (gen/fmap char (gen/choose 32 126))]
     (let [original-text (text state)
-          inserted (ed/self-insert (assoc state :last-key ch))
+          inserted (ed/self-insert state ch)
           deleted (ed/delete-backward-char inserted)]
       (= original-text (text deleted)))))
 
@@ -113,16 +113,14 @@
 ;; --- Editing: self-insert ---
 
 (deftest self-insert-char
-  (let [s (-> (make-state "ab" 1) (assoc :last-key \X))]
-    (is (= "aXb" (text (ed/self-insert s))))))
+  (is (= "aXb" (text (ed/self-insert (make-state "ab" 1) \X)))))
 
 (deftest self-insert-string
-  (let [s (-> (make-state "ab" 1) (assoc :last-key "\uD83D\uDE00"))]
-    (is (= "a\uD83D\uDE00b" (text (ed/self-insert s))))))
+  (is (= "a\uD83D\uDE00b"
+         (text (ed/self-insert (make-state "ab" 1) "\uD83D\uDE00")))))
 
 (deftest self-insert-non-key
-  (let [s (-> (make-state "ab" 1) (assoc :last-key :ctrl))]
-    (is (= "ab" (text (ed/self-insert s))))))
+  (is (= "ab" (text (ed/self-insert (make-state "ab" 1) :ctrl)))))
 
 (deftest insert-newline-test
   (is (= "a\nb" (text (ed/insert-newline (make-state "ab" 1))))))

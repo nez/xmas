@@ -133,22 +133,27 @@
      (outer# (.toString sb#))
      (.flush real-out)
      result#))
-(defn move [r c] (tw (str E (inc r) ";" (inc c) "H")))
-(defn clreol [] (tw (str E "K")))
-(defn cls [] (tw (str E "2J" E "H")))
-(defn show-cur [] (tw (str E "?25h")))
-(defn hide-cur [] (tw (str E "?25l")))
-(defn reset-sg [] (tw (str E "0m")))
+
+(defn- esc [& xs] (tw (apply str E xs)))
+
+(defn move [r c] (esc (inc r) ";" (inc c) "H"))
+(defn clreol   [] (esc "K"))
+(defn cls      [] (esc "2J" E "H"))
+(defn show-cur [] (esc "?25h"))
+(defn hide-cur [] (esc "?25l"))
+(defn reset-sg [] (esc "0m"))
 
 (defn sg [{:keys [fg bg bold]}]
-  (let [c (cond-> [0] bold (conj 1) fg (conj 38 5 fg) bg (conj 48 5 bg))]
-    (tw (str E (str/join ";" c) "m"))))
+  (esc (str/join ";" (cond-> [0] bold (conj 1) fg (conj 38 5 fg) bg (conj 48 5 bg))) "m"))
+
+(defn teardown!
+  "Restore the terminal to a sane state. Each step is isolated so a failure
+   in one doesn't abort the rest."
+  []
+  (doseq [f [reset-sg cls #(move 0 0) show-cur flush! exit-raw-mode!]]
+    (try (f) (catch Exception _))))
 
 (defn install-shutdown-hook!
   "Safety net: restore terminal even on unexpected JVM exit."
   []
-  (.addShutdownHook (Runtime/getRuntime)
-    (Thread. ^Runnable (fn []
-      (try (reset-sg) (cls) (move 0 0) (show-cur) (flush!)
-           (exit-raw-mode!)
-           (catch Exception _))))))
+  (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable teardown!)))

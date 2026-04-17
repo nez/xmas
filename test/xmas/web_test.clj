@@ -8,7 +8,7 @@
   {:buf "*test*"
    :bufs {"*test*" (assoc (buf/make "*test*" text nil) :point 0)}
    :kill [] :msg nil :mini nil
-   :scroll 0 :rows 24 :cols 80 :last-key nil})
+   :scroll 0 :rows 24 :cols 80})
 
 (deftest render-to-string-produces-output
   (let [s (make-state "hello\nworld")

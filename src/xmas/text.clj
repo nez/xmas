@@ -87,6 +87,16 @@
         (if (> nw col) p
           (recur (+ p (Character/charCount cp)) nw))))))
 
+(defn- match-at?
+  "Does pattern match t at position i?"
+  [^CharSequence t ^String pattern ^long i]
+  (let [pn (.length pattern)]
+    (loop [j (int 0)]
+      (cond
+        (>= j pn) true
+        (= (.charAt t (int (+ i j))) (.charAt pattern j)) (recur (unchecked-inc-int j))
+        :else false))))
+
 (defn search-forward
   "Position of pattern in t at or after from, or nil."
   [^CharSequence t ^String pattern ^long from]
@@ -95,13 +105,7 @@
           pn (.length pattern)]
       (loop [i from]
         (when (<= (+ i pn) tn)
-          (if (loop [j (int 0)]
-                (cond
-                  (>= j pn) true
-                  (= (.charAt t (int (+ i j))) (.charAt pattern j)) (recur (unchecked-inc-int j))
-                  :else false))
-            i
-            (recur (inc i))))))))
+          (if (match-at? t pattern i) i (recur (inc i))))))))
 
 (defn search-backward
   "Position of pattern in t before from, or nil."
@@ -111,10 +115,4 @@
           start (min (dec from) (- (.length t) pn))]
       (loop [i (long (max 0 start))]
         (when (>= i 0)
-          (if (loop [j (int 0)]
-                (cond
-                  (>= j pn) true
-                  (= (.charAt t (int (+ i j))) (.charAt pattern j)) (recur (unchecked-inc-int j))
-                  :else false))
-            i
-            (recur (dec i))))))))
+          (if (match-at? t pattern i) i (recur (dec i))))))))

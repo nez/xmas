@@ -1,51 +1,9 @@
 # xmas — Road to Minimal Emacs
 
-## Current State (v0.1)
+## Current State (v0.2)
 
-Working text editor with Emacs keybindings. ~1300 LOC, 283 tests, gap buffer with line index, elisp reader.
-
-## Phase: Elisp Evaluator (v0.2) — IN PROGRESS
-
-**Goal**: Run user config from `~/.xmas/init.el`. Define commands, bind keys, manipulate buffers.
-
-### Evaluator (~120 LOC)
-
-- eval/apply loop with dynamic scope, Lisp-2 (separate var/fn namespaces)
-- Special forms: quote, if, cond, progn, setq, let, defun, lambda, while, and, or
-- Built-ins: arithmetic (+, -, *, /, mod, <, >, =, <=, >=), list (cons, car, cdr, list, length, nth, null, append), string (concat, substring, format), predicates (numberp, stringp, listp, symbolp, equal)
-
-### Buffer Bridge (~40 LOC)
-
-- point, point-min, point-max, goto-char, forward-char, backward-char
-- beginning-of-line, end-of-line, insert, delete-region
-- buffer-string, buffer-name, search-forward, search-backward, message
-
-### Keybinding Bridge (~30 LOC)
-
-- global-set-key: parse Emacs key strings, wrap elisp fn, insert into bindings
-- Key string format: \C-x = ctrl, \M-x = meta
-
-### Integration (~20 LOC)
-
-- Init file: load ~/.xmas/init.el at startup, eval each form
-- M-: (eval-expression): minibuffer prompt, eval, show result in echo area
-
-### Success Criteria
-
-```elisp
-;; ~/.xmas/init.el
-(defun kill-whole-line ()
-  (beginning-of-line)
-  (let ((start (point)))
-    (end-of-line)
-    (forward-char)
-    (delete-region start (point))))
-
-(global-set-key "\C-ck" 'kill-whole-line)
-(message "Config loaded")
-```
-
----
+Text editor with Emacs keybindings, gap buffer with line index, elisp reader + evaluator,
+buffer/keybinding bridges, `~/.xmas/init.el` loader, `M-:` eval-expression. 356 tests.
 
 ## Phase: Tier 1 Features (v0.3)
 

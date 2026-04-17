@@ -44,7 +44,6 @@
 (s/def ::scroll nat-int?)
 (s/def ::rows pos-int?)
 (s/def ::cols pos-int?)
-(s/def ::last-key any?)
 (s/def ::prompt string?)
 (s/def ::on-done fn?)
 (s/def ::prev-buf string?)
@@ -52,7 +51,7 @@
 
 (s/def ::editor
   (s/and
-    (s/keys :req-un [::buf ::bufs ::kill ::msg ::scroll ::rows ::cols ::last-key])
+    (s/keys :req-un [::buf ::bufs ::kill ::msg ::scroll ::rows ::cols])
     #(contains? (:bufs %) (:buf %))))
 
 ;; --- Generators ---
@@ -96,7 +95,7 @@
     {:buf "*test*"
      :bufs {"*test*" buffer}
      :kill [] :msg nil :mini nil
-     :scroll 0 :rows rows :cols cols :last-key nil}))
+     :scroll 0 :rows rows :cols cols}))
 
 (defn gen-edit-args
   "Generate [buffer from to repl] for valid buf/edit calls."
