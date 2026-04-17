@@ -429,6 +429,29 @@
     (is (not (:exit s')))
     (is (clojure.string/starts-with? (:msg s') "Modified"))))
 
+(deftest exit-second-attempt-confirms
+  ;; Regression: handle-key used to clear :exit-pending at entry of every
+  ;; keystroke, so the second C-x C-c never saw the flag and endlessly
+  ;; re-asked for confirmation.
+  (let [s (-> (make-state "abc" 0) (ed/edit 0 0 "x"))
+        s1 (-> s (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \c]))
+        s2 (-> s1 (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \c]))]
+    (is (:exit-pending s1))
+    (is (not (:exit s1)))
+    (is (:exit s2))))
+
+(deftest exit-pending-cleared-by-unrelated-command
+  ;; After the confirm prompt, any non-exit command should cancel the
+  ;; pending exit (Emacs convention).
+  (let [s (-> (make-state "abc" 0) (ed/edit 0 0 "x"))
+        s1 (-> s (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \c]))
+        s2 (ed/handle-key s1 [:ctrl \f])
+        s3 (-> s2 (ed/handle-key [:ctrl \x]) (ed/handle-key [:ctrl \c]))]
+    (is (:exit-pending s1))
+    (is (nil? (:exit-pending s2)))
+    (is (not (:exit s3)))
+    (is (clojure.string/starts-with? (:msg s3) "Modified"))))
+
 ;; --- Minibuffer history ---
 
 (deftest mini-history-prev-next
@@ -531,6 +554,21 @@
               (assoc-in [:bufs "*test*" :file] "/nonexistent-dir/impossible/file.txt"))
         s' (ed/save-buffer s)]
     (is (clojure.string/starts-with? (:msg s') "Save failed"))))
+
+(deftest save-buffer-relative-path
+  ;; Regression: a bare filename (no directory) produced a relative Path
+  ;; whose getParent() is nil, which NPE'd inside Files/createTempFile.
+  ;; Save goes through .getAbsoluteFile, which resolves against the JVM
+  ;; cwd — so the file lands in cwd. Clean it up afterward.
+  (let [fname (str "xmas-relsave-" (System/nanoTime) ".txt")
+        f (java.io.File. fname)]
+    (try
+      (let [s (-> (make-state "relative content" 0)
+                  (assoc-in [:bufs "*test*" :file] fname))
+            s' (ed/save-buffer s)]
+        (is (clojure.string/starts-with? (:msg s') "Wrote"))
+        (is (= "relative content" (slurp f))))
+      (finally (.delete f)))))
 
 ;; --- Mini accept without mini ---
 

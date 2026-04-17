@@ -134,7 +134,7 @@
   (let [b (cur s)]
     (if-let [f (:file b)]
       (try
-        (let [target (.toPath (java.io.File. f))
+        (let [target (.toPath (.getAbsoluteFile (java.io.File. f)))
               parent (.getParent target)
               tmp (Files/createTempFile parent ".xmas-" ".tmp" (into-array java.nio.file.attribute.FileAttribute []))]
           (spit (.toFile tmp) (:text b))
@@ -356,43 +356,48 @@
   "Pure state transition. Handles prefix keys via :pending state.
    Works identically for terminal and web — one key at a time."
   [s key]
-  (let [s (assoc s :last-key key :msg nil :exit-pending nil)]
-    (cond
-      ;; pending prefix — resolve second key
-      (:pending s)
-      (let [prefix-map (:pending s)
-            s (dissoc s :pending)]
-        (if-let [cmd (get prefix-map key)]
-          (cmd s)
-          (msg s (str "prefix " key " undefined"))))
+  (let [prev-exit-pending (:exit-pending s)
+        s (assoc s :last-key key :msg nil)
+        s' (cond
+             ;; pending prefix — resolve second key
+             (:pending s)
+             (let [prefix-map (:pending s)
+                   s (dissoc s :pending)]
+               (if-let [cmd (get prefix-map key)]
+                 (cmd s)
+                 (msg s (str "prefix " key " undefined"))))
 
-      ;; incremental search mode
-      (:isearch s)
-      (handle-isearch s key)
+             ;; incremental search mode
+             (:isearch s)
+             (handle-isearch s key)
 
-      ;; minibuffer keys
-      (and (:mini s) (= key :return))
-      (mini-accept s)
+             ;; minibuffer keys
+             (and (:mini s) (= key :return))
+             (mini-accept s)
 
-      (and (:mini s) (= key [:meta \p]))
-      (mini-history-prev s)
+             (and (:mini s) (= key [:meta \p]))
+             (mini-history-prev s)
 
-      (and (:mini s) (= key [:meta \n]))
-      (mini-history-next s)
+             (and (:mini s) (= key [:meta \n]))
+             (mini-history-next s)
 
-      (and (:mini s) (= key :tab))
-      (mini-tab-complete s)
+             (and (:mini s) (= key :tab))
+             (mini-tab-complete s)
 
-      ;; normal dispatch
-      :else
-      (let [binding (or (get bindings key)
-                        (get (:el-bindings s) key))]
-        (cond
-          (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
-          (fn? binding)  (binding s)
-          (char? key)    (if (>= (int key) 32) (self-insert s) s)
-          (string? key)  (self-insert s)
-          :else          (msg s (str key " undefined")))))))
+             ;; normal dispatch
+             :else
+             (let [binding (or (get bindings key)
+                               (get (:el-bindings s) key))]
+               (cond
+                 (map? binding) (assoc s :pending binding)  ;; store prefix, wait for next key
+                 (fn? binding)  (binding s)
+                 (char? key)    (if (>= (int key) 32) (self-insert s) s)
+                 (string? key)  (self-insert s)
+                 :else          (msg s (str key " undefined")))))]
+    ;; :exit-pending survives only the command that set it.
+    (cond-> s'
+      (and (not (:pending s')) prev-exit-pending (:exit-pending s'))
+      (dissoc :exit-pending))))
 
 ;; --- Main ---
 

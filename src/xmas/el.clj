@@ -326,10 +326,10 @@
   (let [keys (parse-key-string key-str)
         elisp-fn (or (get @*fns* func-sym)
                      (err (str "Void function: " func-sym)))
-        handler (fn [s]
-                  (binding [*state* (atom s) *vars* *vars* *fns* *fns*]
-                    (apply-user-fn elisp-fn [])
-                    @*state*))]
+        handler (bound-fn* (fn [s]
+                             (binding [*state* (atom s)]
+                               (apply-user-fn elisp-fn [])
+                               @*state*)))]
     (if (= 1 (count keys))
       (swap! *vars* assoc :xmas/bindings
              (assoc (get @*vars* :xmas/bindings {}) (first keys) handler))

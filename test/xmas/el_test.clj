@@ -590,3 +590,16 @@
       ed)
     ;; Verify a binding was registered
     (is (some? (:el-bindings @ed)))))
+
+(deftest eval-global-set-key-handler-runs-elisp
+  ;; Regression: the registered handler's `(binding [*vars* *vars* ...])`
+  ;; evaluated the RHS at call time — outside any outer binding — so
+  ;; *vars*/*fns* rebound to nil and every subsequent var/fn lookup NPE'd.
+  (let [ed (make-editor "hello")]
+    (el/eval-string
+      "(progn (defun my-cmd () (insert \"!\")) (global-set-key \"\\\\C-t\" 'my-cmd))"
+      ed)
+    (let [handler (get-in @ed [:el-bindings [:ctrl \t]])
+          new-state (handler @ed)]
+      (is (= "!hello" (str (:text (get (:bufs new-state) "*test*")))))
+      (is (= 1 (:point (get (:bufs new-state) "*test*")))))))
