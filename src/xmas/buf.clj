@@ -38,6 +38,12 @@
 
 (defn edit [b from to repl]
   (let [t         (:text b)
+        ;; Normalize: callers sometimes pass out-of-order or out-of-bounds
+        ;; ranges (query-replace paths, dired ops). Clamp once here so the
+        ;; underlying gap/edit never sees a bad range.
+        tn        (count t)
+        from      (-> (long from) (max 0) (min tn))
+        to        (-> (long to)   (max from) (min tn))
         old       (.toString (.subSequence ^CharSequence t (int from) (int to)))
         repl-len  (count repl)
         new-text  (gap/edit t from to repl)

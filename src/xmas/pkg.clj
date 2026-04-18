@@ -47,17 +47,25 @@
            (log/log "pkg:" name "loaded"))
          (catch Exception e (log/log "pkg:" name "failed:" (.getMessage e))))))
 
+(def ^:private url-re #"^(https?|git|ssh)://[^\s]+$")
+
 (defn install
   "Clone `url` into ~/.xmas/packages/<pkg>. Returns {:status :ok|:err :msg s}."
   [pkg url]
   (check-name! pkg)
+  ;; Reject URLs that don't look like a normal scheme. Otherwise a URL
+  ;; starting with `-` (e.g. `--upload-pack=...`) would be parsed by git
+  ;; as an option and could execute arbitrary commands (CVE-2017-1000117
+  ;; class). `--` before the positional args is a second belt.
+  (when-not (and (string? url) (re-matches url-re url))
+    (throw (ex-info (str "invalid package url: " (pr-str url)) {:url url})))
   (let [parent (File. (packages-dir))
         target (File. parent pkg)]
     (.mkdirs parent)
     (if (.exists target)
       {:status :ok :msg (str pkg " already installed")}
       (try
-        (let [pb   (doto (ProcessBuilder. ["git" "clone" url (.getAbsolutePath target)])
+        (let [pb   (doto (ProcessBuilder. ["git" "clone" "--" url (.getAbsolutePath target)])
                      (.redirectErrorStream true))
               proc (.start pb)
               out  (slurp (.getInputStream proc))

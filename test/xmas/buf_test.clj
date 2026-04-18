@@ -195,3 +195,15 @@
     (is (> (:version b1) v0))
     (is (> (:version b2) (:version b1)))
     (is (> (:version b3) (:version b2)))))
+
+(deftest edit-normalizes-bad-range
+  ;; Regression: buf/edit with from > to or to > length used to crash
+  ;; (StringIndexOutOfBoundsException in subSequence, or
+  ;; NegativeArraySizeException deep in gap/edit). Both normalize now.
+  (let [b (buf/make "t" "hello" nil)]
+    ;; from > to — treated as an insertion at `from`
+    (is (= "helXlo" (str (:text (buf/edit b 3 1 "X")))))
+    ;; to past end — clamped to length
+    (is (= "heYY" (str (:text (buf/edit b 2 100 "YY")))))
+    ;; from past end — clamped
+    (is (= "helloZ" (str (:text (buf/edit b 100 200 "Z")))))))

@@ -15,12 +15,13 @@
 (defn line-start
   "Start of line containing pos."
   ^long [^CharSequence t ^long pos]
-  (if (<= pos 0) 0
-    (loop [i (dec pos)]
-      (cond
-        (neg? i) 0
-        (= (.charAt t (int i)) \newline) (inc i)
-        :else (recur (dec i))))))
+  (let [n (.length t)]
+    (if (<= pos 0) 0
+      (loop [i (min (dec pos) (dec n))]
+        (cond
+          (neg? i) 0
+          (= (.charAt t (int i)) \newline) (inc i)
+          :else (recur (dec i)))))))
 
 (defn line-end
   "End of line containing pos (position of newline, or end of text)."

@@ -29,13 +29,15 @@
 
 (defn adjust
   "Update overlay positions after an edit at [e-from e-to) replaced with
-   `repl-len` characters. Drops zero-length overlays left behind."
+   `repl-len` characters. Drops overlays that *collapsed as a result of
+   this edit* — overlays created empty (caret / marker use) are preserved."
   [overlays e-from e-to repl-len]
   (->> overlays
-       (map (fn [ov]
-              (let [[f t] (adjust-range (:from ov) (:to ov) e-from e-to repl-len)]
-                (assoc ov :from f :to t))))
-       (remove (fn [ov] (>= (:from ov) (:to ov))))
+       (keep (fn [ov]
+               (let [was-empty? (= (:from ov) (:to ov))
+                     [f t] (adjust-range (:from ov) (:to ov) e-from e-to repl-len)]
+                 (when (or was-empty? (< f t))
+                   (assoc ov :from f :to t)))))
        vec))
 
 (defn in-range

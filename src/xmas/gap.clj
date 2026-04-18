@@ -180,6 +180,11 @@
         oge (long (.-ge gb))
         rn  (.length repl)
         cn  (- (alength b) (- oge ogs))
+        ;; Clamp to the buffer's actual range. Callers downstream of
+        ;; buf/edit already normalize, but gap/edit is a public primitive
+        ;; and must not walk off the end with a NegativeArraySizeException.
+        from (-> (long from) (max 0) (min cn))
+        to   (-> (long to)   (max from) (min cn))
         nn  (+ (- cn (- to from)) rn)
         g   (long (max GAP rn))
         nb  (char-array (+ nn g))

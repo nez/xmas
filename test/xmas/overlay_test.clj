@@ -48,3 +48,11 @@
              (ov/make 20 25)]]
     (is (= [10 15] (let [o (first (ov/in-range ovs 12 14))]
                      [(:from o) (:to o)])))))
+
+(deftest adjust-preserves-intentionally-empty-overlays
+  ;; Regression: `adjust` unconditionally dropped overlays with :from == :to,
+  ;; so empty "cursor marker" overlays disappeared after any unrelated edit.
+  (let [ovs  [(ov/make 5 5 :cursor)]
+        ovs' (ov/adjust ovs 20 22 3)]
+    (is (= 1 (count ovs')))
+    (is (= [5 5] [(:from (first ovs')) (:to (first ovs'))]))))

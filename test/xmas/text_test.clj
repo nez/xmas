@@ -233,3 +233,9 @@
   ;; `start` clamped to 0 and match-at? read past the end.
   (is (nil? (text/search-backward "ab" "abcde" 2)))
   (is (nil? (text/search-backward "x" "xy" 1))))
+
+(deftest line-start-clamps-pos-past-end
+  ;; Regression: line-start with pos > length used to walk off the end and
+  ;; crash with StringIndexOutOfBoundsException.
+  (is (= 0 (text/line-start "abc" 100)))
+  (is (= 4 (text/line-start "abc\nxyz" 999))))

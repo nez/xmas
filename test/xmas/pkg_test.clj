@@ -88,3 +88,17 @@
             (is (thrown? Exception (pkg/load-package "" ed)))
             (is (thrown? Exception (pkg/install "../x" "http://example/x"))))))
       (finally (rm-rf h)))))
+
+(deftest install-rejects-argument-injection-urls
+  ;; Regression: a URL starting with `-` or `--` would be parsed by git as
+  ;; an option (e.g. `--upload-pack=…`) and could run arbitrary commands.
+  ;; Any URL that doesn't look like a normal scheme is rejected.
+  (let [[h _] (tmp-home)]
+    (try
+      (with-home h
+        (fn []
+          (is (thrown? Exception (pkg/install "p" "--upload-pack=/tmp/evil")))
+          (is (thrown? Exception (pkg/install "p" "-x")))
+          (is (thrown? Exception (pkg/install "p" "")))
+          (is (thrown? Exception (pkg/install "p" "file:///etc/passwd")))))
+      (finally (rm-rf h)))))
