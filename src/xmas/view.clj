@@ -20,16 +20,23 @@
    :builtin   {:fg 67  :bg nil :bold true}})
 
 (defn- ensure-visible [content point scroll rows]
-  (let [point-line  (gap/line-of content point)
-        scroll-line (gap/line-of content scroll)]
-    (cond
-      (< point scroll)
-      (gap/nth-line-start content point-line)
+  ;; A pane with body-rows <= 0 (e.g. a 1-row split that gets 0 body rows
+  ;; after reserving the modeline) has nowhere to show the point, so
+  ;; scrolling it produces out-of-range line indices — the old "anchor on
+  ;; last row" branch used to compute nth-line-start of (inc last-line)
+  ;; and crash with ArrayIndexOutOfBoundsException.
+  (if (<= rows 0)
+    scroll
+    (let [point-line  (gap/line-of content point)
+          scroll-line (gap/line-of content scroll)]
+      (cond
+        (< point scroll)
+        (gap/nth-line-start content point-line)
 
-      (>= (- point-line scroll-line) rows)
-      (gap/nth-line-start content (- point-line (dec rows)))
+        (>= (- point-line scroll-line) rows)
+        (gap/nth-line-start content (- point-line (dec rows)))
 
-      :else scroll)))
+        :else scroll))))
 
 (defn- ensure-hvisible ^long [^long hscroll ^long cc ^long cols]
   ;; When hscroll > 0, column 0 is reserved for the `$` marker, so only

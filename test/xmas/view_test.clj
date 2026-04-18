@@ -1,6 +1,8 @@
 (ns xmas.view-test
   (:require [clojure.test :refer [deftest is]]
-            [xmas.view :as view]))
+            [xmas.buf :as buf]
+            [xmas.view :as view]
+            [xmas.window :as win]))
 
 ;; --- merge-region: overlay [r-lo r-hi) onto pre-existing face spans ---
 
@@ -42,3 +44,17 @@
 (deftest apply-face-range-general-face
   (is (= [[0 2 :default] [2 5 :builtin] [5 10 :default]]
          (view/apply-face-range [[0 10 :default]] 2 5 :builtin))))
+
+;; --- render with a 0-body-row pane must not crash ---
+
+(deftest render-tiny-split-doesnt-crash
+  ;; Regression: a stacked split of a 3-row frame leaves the pane with a
+  ;; 1-row rect, i.e. body-rows = 0. ensure-visible used to unconditionally
+  ;; compute nth-line-start of (inc point-line) in that branch, which
+  ;; blew up with AIOOB for a point on the last line.
+  (let [b (assoc (buf/make "t" "a\nb\nc\nd\ne" nil) :point 8)
+        [tree path] (win/split (win/leaf "t") [] :stacked)
+        s {:buf "t" :bufs {"t" b}
+           :windows tree :cur-window path
+           :rows 3 :cols 10}]
+    (is (map? (view/render s)))))
