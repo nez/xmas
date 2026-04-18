@@ -204,21 +204,30 @@
             (let [v (eval init)] (swap! *vars* assoc sym v) v))
           nil (partition 2 args)))
 
+(defn- restore-vars!
+  "Pop `syms` from *vars*, restoring each to its value in `outer` (or
+   unbinding it if it wasn't in outer). Shared by with-scope and let*."
+  [outer syms]
+  (swap! *vars*
+         (fn [m] (reduce (fn [m s]
+                           (if (contains? outer s) (assoc m s (outer s)) (dissoc m s)))
+                         m syms))))
+
 (defn- with-scope
   "Bind syms→vals in *vars* for the duration of thunk, restoring prior state on exit."
   [syms vals thunk]
   (let [outer @*vars*]
     (swap! *vars* merge (zipmap syms vals))
-    (try (thunk)
-         (finally
-           (swap! *vars*
-             (fn [m] (reduce (fn [m s]
-                               (if (contains? outer s) (assoc m s (outer s)) (dissoc m s)))
-                             m syms)))))))
+    (try (thunk) (finally (restore-vars! outer syms)))))
+
+(defn- let-pairs
+  "Normalize a let bindings form: `(x)` → `[x nil]`, `((x v))` → `[x v]`."
+  [bindings]
+  (map #(if (symbol? %) [% nil] %) bindings))
 
 (defn- eval-let [[bindings & body]]
-  (let [pairs (map #(if (symbol? %) [% nil] %) bindings)
-        ;; elisp `let` binds in parallel: inits see the OUTER env, not each other.
+  ;; elisp `let` binds in parallel: inits see the OUTER env, not each other.
+  (let [pairs (let-pairs bindings)
         syms (map first pairs)
         vals (mapv (fn [[_ init]] (eval init)) pairs)]
     (with-scope syms vals #(eval-body body))))
@@ -226,18 +235,14 @@
 (defn- eval-let*
   "`let*` binds sequentially — each init sees the prior pairs already bound."
   [[bindings & body]]
-  (let [pairs (map #(if (symbol? %) [% nil] %) bindings)
+  (let [pairs (let-pairs bindings)
         syms  (map first pairs)
         outer @*vars*]
     (try
       (doseq [[sym init] pairs]
         (swap! *vars* assoc sym (eval init)))
       (eval-body body)
-      (finally
-        (swap! *vars*
-               (fn [m] (reduce (fn [m s]
-                                 (if (contains? outer s) (assoc m s (outer s)) (dissoc m s)))
-                               m syms)))))))
+      (finally (restore-vars! outer syms)))))
 
 (defn- register-fn!
   "Install a {:args :body} entry into `tbl` for `name`. Shared by defun and
