@@ -76,6 +76,11 @@
           from-line (gap/line-of new-text from)]
       (-> b
           (assoc :text new-text)
+          (assoc :modified true)
+          ;; Undo/redo mutate the buffer, so they must participate in
+          ;; auto-save threshold tracking — otherwise a long undo chain
+          ;; never gets its state backed up.
+          (update :edit-count (fnil inc 0))
           (update :version (fnil inc 0))
           (update :line-states truncate-states from-line)
           (update src-key pop)

@@ -109,12 +109,13 @@
           (if (match-at? t pattern i) i (recur (inc i))))))))
 
 (defn search-backward
-  "Position of pattern in t before from, or nil."
+  "Position of the latest `pattern` match whose END is <= `from`, or nil.
+   A match straddling `from` (ending past it) is not returned."
   [^CharSequence t ^String pattern ^long from]
   (when (and (seq pattern) (pos? from))
     (let [pn (.length pattern)
           tn (.length t)]
       (when (<= pn tn)
-        (loop [i (long (min (dec from) (- tn pn)))]
+        (loop [i (long (- (min from tn) pn))]
           (when (>= i 0)
             (if (match-at? t pattern i) i (recur (dec i)))))))))

@@ -239,3 +239,10 @@
   ;; crash with StringIndexOutOfBoundsException.
   (is (= 0 (text/line-start "abc" 100)))
   (is (= 4 (text/line-start "abc\nxyz" 999))))
+
+(deftest search-backward-rejects-straddling-match
+  ;; Regression: search-backward used to return a match whose end was
+  ;; past `from`. "bb" in "abbab" from=2 would return 1, but match ends
+  ;; at 3 > 2. The match must be fully before `from`.
+  (is (nil? (text/search-backward "abbab" "bb" 2)))
+  (is (= 1 (text/search-backward "abbab" "bb" 5))))

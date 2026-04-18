@@ -243,6 +243,13 @@
 (defn- pad-to-cols! [used cols]
   (when (< used cols) (t/tw (pad-spaces (- cols used)))))
 
+(defn- clip-to-cols
+  "Clip `s` to at most `cols` display columns (CJK-aware)."
+  [^String s ^long cols]
+  (let [n (count s)
+        end (text/pos-at-col s 0 n cols)]
+    (if (< end n) (subs s 0 end) s)))
+
 (defn- render-echo-area
   [{:keys [rows cols] :as state}]
   (let [mini (:mini state) isearch (:isearch state) msg (:msg state)
@@ -252,21 +259,25 @@
       mini
       (let [{:keys [prompt]} mini
             mb (get (:bufs state) (:buf state))
-            input (:text mb)
-            cursor (:point mb)]
+            input (str (:text mb))
+            cursor (:point mb)
+            pw (text/display-width prompt 0 (count prompt))
+            avail (max 0 (- cols pw))
+            input' (clip-to-cols input avail)]
         (t/sg (:prompt faces)) (t/tw prompt)
-        (t/reset-sg) (t/tw input)
-        (pad-to-cols! (+ (count prompt) (text/display-width input 0 (count input))) cols)
-        (t/move mini-row (+ (count prompt) (text/display-width input 0 cursor))))
+        (t/reset-sg) (t/tw input')
+        (pad-to-cols! (+ pw (text/display-width input' 0 (count input'))) cols)
+        (t/move mini-row (+ pw (min avail (text/display-width input 0 cursor)))))
 
       isearch
       (let [p (str (if (= (:direction isearch) :forward) "I-search: " "I-search backward: ")
-                   (:pattern isearch))]
-        (t/sg (:prompt faces)) (t/tw p) (t/reset-sg)
-        (pad-to-cols! (text/display-width p 0 (count p)) cols))
+                   (:pattern isearch))
+            p' (clip-to-cols p cols)]
+        (t/sg (:prompt faces)) (t/tw p') (t/reset-sg)
+        (pad-to-cols! (text/display-width p' 0 (count p')) cols))
 
       :else
-      (let [m (or msg "")]
+      (let [m (clip-to-cols (or msg "") cols)]
         (t/reset-sg) (t/tw m)
         (pad-to-cols! (text/display-width m 0 (count m)) cols)))))
 
