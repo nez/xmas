@@ -579,6 +579,21 @@
   (is (nil? (ev "(let (x) x)")))
   (is (= 5 (ev "(let (x y) (setq x 5) x)"))))
 
+(deftest eval-let*-sequential
+  ;; Regression: let* used to dispatch as a function call and throw
+  ;; "Void function: let*". It now binds sequentially — each init sees
+  ;; the prior pairs already in scope.
+  (is (= 2 (ev "(let* ((a 1) (b a)) (+ a b))")))
+  ;; outer x should still be seen before the inner binding shadows
+  (is (= 10 (ev "(progn (setq x 10) (let* ((y x)) y))"))))
+
+(deftest condition-case-catches-void-function
+  ;; Regression: built-in errors (Void function, Void variable, etc.)
+  ;; were uncatchable from elisp because `err` threw bare ex-info.
+  ;; They now signal 'error and are caught by (condition-case _ _ (error ...)).
+  (is (= "caught" (ev "(condition-case _ (undefined-fn) (error \"caught\"))")))
+  (is (= "caught" (ev "(condition-case _ x-unbound (error \"caught\"))"))))
+
 (deftest eval-search-forward-finds-at-point
   ;; Was starting the scan at (inc point), missing a match at point itself.
   (let [ed (make-editor "world hello world")]

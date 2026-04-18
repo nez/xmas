@@ -200,9 +200,14 @@
     (GapBuffer. nb ngs nge (splice-lidx (.-lidx gb) from to repl))))
 
 (defn substr
-  "Extract logical [from,to) as a String."
+  "Extract logical [from,to) as a String. Clamps both endpoints into
+   [0, count] so stale point/mark coords from a concurrently-shortened
+   buffer don't trigger StringIndexOutOfBoundsException."
   ^String [^GapBuffer gb ^long from ^long to]
-  (.toString (.subSequence gb (int from) (int to))))
+  (let [n    (count gb)
+        from (-> (long from) (max 0) (min n))
+        to   (-> (long to)   (max from) (min n))]
+    (.toString (.subSequence gb (int from) (int to)))))
 
 ;; --- Line index queries ---
 

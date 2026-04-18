@@ -20,7 +20,13 @@
 (defn- peek-ch [^PushbackReader rdr]
   (when-let [ch (read-ch rdr)] (unread-ch rdr ch) ch))
 
-(defn- err [msg] (throw (ex-info msg {})))
+(defn- err
+  "Raise an elisp `error` signal. Catchable from `condition-case` with
+   condition `error` (or `t`). Matches Emacs: built-in errors like
+   Void-function / Void-variable / Wrong-number-of-arguments are all
+   children of the `error` condition."
+  [msg]
+  (throw (ex-info msg {:emacs/signal 'error :emacs/data (list msg)})))
 
 (def ^:private ws-chars #{\space \tab \newline \return})
 (defn- ws? [ch] (contains? ws-chars ch))
@@ -216,6 +222,22 @@
         syms (map first pairs)
         vals (mapv (fn [[_ init]] (eval init)) pairs)]
     (with-scope syms vals #(eval-body body))))
+
+(defn- eval-let*
+  "`let*` binds sequentially — each init sees the prior pairs already bound."
+  [[bindings & body]]
+  (let [pairs (map #(if (symbol? %) [% nil] %) bindings)
+        syms  (map first pairs)
+        outer @*vars*]
+    (try
+      (doseq [[sym init] pairs]
+        (swap! *vars* assoc sym (eval init)))
+      (eval-body body)
+      (finally
+        (swap! *vars*
+               (fn [m] (reduce (fn [m s]
+                                 (if (contains? outer s) (assoc m s (outer s)) (dissoc m s)))
+                               m syms)))))))
 
 (defn- register-fn!
   "Install a {:args :body} entry into `tbl` for `name`. Shared by defun and
@@ -746,6 +768,7 @@
         progn   (eval-body args)
         setq    (eval-setq args)
         let     (eval-let args)
+        let*    (eval-let* args)
         defun   (eval-defun args)
         defmacro (eval-defmacro args)
         define-derived-mode (eval-define-mode :major args)
