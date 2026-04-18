@@ -444,6 +444,18 @@
   (let [s (ed/call-last-kbd-macro (make-state ""))]
     (is (= "No kbd macro defined" (:msg s)))))
 
+(deftest call-last-kbd-macro-doesnt-inline-into-active-recording
+  ;; Regression: calling a stored macro while recording another used to
+  ;; append each replayed key to :macro-recording, so the new macro
+  ;; captured the INLINED keys instead of a single "call macro" step.
+  (let [s0 (-> (make-state "") (assoc :last-macro [\x \y]))
+        ;; simulate "in the middle of recording", currently has [\z]
+        s1 (assoc s0 :macro-recording [\z])
+        s2 (ed/call-last-kbd-macro s1)]
+    (is (= "xy" (text s2)))
+    ;; The replayed keys must NOT be appended to :macro-recording.
+    (is (= [\z] (:macro-recording s2)))))
+
 (deftest name-last-kbd-macro-stores-under-name
   (let [s0 (-> (make-state "") (assoc :last-macro [\a \b]))
         s1 (ed/name-last-kbd-macro s0 "greet")]

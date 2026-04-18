@@ -453,7 +453,9 @@
           {:keys [completed candidates]} (completer input s)]
       (-> s
           (mini-set completed)
-          (cond-> (seq candidates) (msg (str/join " " candidates)))))
+          ;; Stash on :mini itself — :msg isn't rendered while a mini is
+          ;; active, so the candidate list used to be invisible.
+          (assoc-in [:mini :candidates] (vec candidates))))
     s))
 
 (declare handle-key)
@@ -710,9 +712,18 @@
             (msg "Keyboard macro defined")))
     (msg s "Not defining kbd macro")))
 
+(defn- replay-macro
+  "Reduce `keys` through handle-key without recording them as themselves —
+   otherwise a macro invoked while recording would inline its own keys
+   into the outer recording."
+  [s keys]
+  (let [rec (:macro-recording s)
+        s'  (reduce handle-key (dissoc s :macro-recording) keys)]
+    (cond-> s' rec (assoc :macro-recording rec))))
+
 (defn call-last-kbd-macro [s]
   (if-let [keys (:last-macro s)]
-    (reduce handle-key s keys)
+    (replay-macro s keys)
     (msg s "No kbd macro defined")))
 
 (defn name-last-kbd-macro
@@ -731,7 +742,7 @@
   "Replay the macro stored under `name`."
   [s name]
   (if-let [keys (get-in s [:named-macros (trim-name name)])]
-    (reduce handle-key s keys)
+    (replay-macro s keys)
     (msg s (str "No macro: " name))))
 
 (defn name-last-kbd-macro-cmd

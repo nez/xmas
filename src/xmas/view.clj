@@ -257,16 +257,23 @@
     (t/move mini-row 0)
     (cond
       mini
-      (let [{:keys [prompt]} mini
+      (let [{:keys [prompt candidates]} mini
             mb (get (:bufs state) (:buf state))
             input (str (:text mb))
             cursor (:point mb)
             pw (text/display-width prompt 0 (count prompt))
             avail (max 0 (- cols pw))
-            input' (clip-to-cols input avail)]
+            input' (clip-to-cols input avail)
+            input-w (text/display-width input' 0 (count input'))
+            ;; After the input, if there's room, show completion candidates.
+            hint (when (seq candidates)
+                   (clip-to-cols (str "  {" (str/join " " candidates) "}")
+                                 (max 0 (- cols pw input-w))))]
         (t/sg (:prompt faces)) (t/tw prompt)
         (t/reset-sg) (t/tw input')
-        (pad-to-cols! (+ pw (text/display-width input' 0 (count input'))) cols)
+        (when hint (t/tw hint))
+        (pad-to-cols! (+ pw input-w (if hint (text/display-width hint 0 (count hint)) 0))
+                      cols)
         (t/move mini-row (+ pw (min avail (text/display-width input 0 cursor)))))
 
       isearch
