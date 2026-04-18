@@ -157,19 +157,27 @@
     (msg s "Not a number")))
 
 (defn- atomic-spit
-  "Write s to path atomically (write to sibling temp, preserve POSIX perms, then rename)."
+  "Write s to path atomically (write to sibling temp, preserve POSIX perms, then rename).
+   If any step after tmp creation fails, the tmp file is removed so a
+   read-only dir or disk-full scenario doesn't leave `.xmas-*.tmp` debris."
   [^String path ^String s]
   (let [target (.toPath (.getAbsoluteFile (java.io.File. path)))
         parent (.getParent target)
         tmp    (Files/createTempFile parent ".xmas-" ".tmp"
                  (into-array java.nio.file.attribute.FileAttribute []))
-        nolink (into-array java.nio.file.LinkOption [])]
-    (spit (.toFile tmp) s)
-    (when (Files/exists target nolink)
-      (try (Files/setPosixFilePermissions tmp (Files/getPosixFilePermissions target nolink))
-           (catch UnsupportedOperationException _)))
-    (Files/move tmp target
-      (into-array [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))))
+        nolink (into-array java.nio.file.LinkOption [])
+        done?  (atom false)]
+    (try
+      (spit (.toFile tmp) s)
+      (when (Files/exists target nolink)
+        (try (Files/setPosixFilePermissions tmp (Files/getPosixFilePermissions target nolink))
+             (catch UnsupportedOperationException _)))
+      (Files/move tmp target
+        (into-array [StandardCopyOption/ATOMIC_MOVE StandardCopyOption/REPLACE_EXISTING]))
+      (reset! done? true)
+      (finally
+        (when-not @done?
+          (try (Files/deleteIfExists tmp) (catch Exception _)))))))
 
 (defn- auto-save-path
   "#file# backup path for a buffer file."
@@ -321,11 +329,15 @@
 (defn mini-start
   ([s prompt on-done] (mini-start s prompt on-done nil))
   ([s prompt on-done completer]
-   (-> s
-       (assoc-in [:bufs mini-buf-name] (buf/make mini-buf-name))
-       (assoc :mini {:prompt prompt :on-done on-done :prev-buf (:buf s)
-                     :history-idx -1 :completer completer})
-       (assoc :buf mini-buf-name))))
+   (if (:mini s)
+     ;; A minibuffer is already active. Opening a second one would drop the
+     ;; outer prompt's `prev-buf` / `on-done` and leave the editor wedged.
+     (msg s "Command attempted to use disabled command in minibuffer")
+     (-> s
+         (assoc-in [:bufs mini-buf-name] (buf/make mini-buf-name))
+         (assoc :mini {:prompt prompt :on-done on-done :prev-buf (:buf s)
+                       :history-idx -1 :completer completer})
+         (assoc :buf mini-buf-name)))))
 
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
@@ -430,7 +442,13 @@
           (msg s (str "Failing I-search: " pattern)))))))
 
 (defn isearch-start [s direction]
-  (-> s (assoc :isearch {:pattern "" :direction direction :origin (:point (cur s))})))
+  (if (:mini s)
+    ;; Isearch and the minibuffer can't sensibly share an editor state —
+    ;; isearch would operate on the minibuffer text, and the minibuffer's
+    ;; prompt would remain live underneath. Refuse.
+    (msg s "Command attempted to use disabled command in minibuffer")
+    (-> s (assoc :isearch {:pattern "" :direction direction
+                           :origin (:point (cur s))}))))
 
 (defn- isearch-accept [s]
   (dissoc s :isearch))

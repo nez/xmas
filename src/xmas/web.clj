@@ -14,7 +14,12 @@
       (view/render (dissoc s :render-sig)))
     (str sb)))
 
-(def ^:private broadcast-keys [:bufs :buf :mini :msg :isearch])
+(def ^:private broadcast-keys
+  ;; Any key here triggers a re-render for web clients. Window-tree and
+  ;; query-replace changes used to be missed — splitting windows or
+  ;; entering query-replace wouldn't redraw until some unrelated key
+  ;; touched one of the watched slots.
+  [:bufs :buf :mini :msg :isearch :windows :cur-window :query-replace])
 
 (defn broadcast! [_ _ old new]
   (when (some #(not= (% old) (% new)) broadcast-keys)

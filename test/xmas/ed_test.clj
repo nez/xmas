@@ -1146,3 +1146,25 @@
     (is (= {:num 4} @seen))
     ;; After the command runs, :prefix-arg must be cleared.
     (is (nil? (:prefix-arg s')))))
+
+;; --- Minibuffer vs modal commands ---
+
+(deftest isearch-refuses-to-start-inside-minibuffer
+  ;; Regression: `C-s` while a minibuffer prompt was open used to set
+  ;; :isearch on top of :mini, leaving the editor wedged. isearch-start
+  ;; now no-ops and sets :msg when :mini is active.
+  (let [s  (make-state "" 0)
+        s1 (ed/handle-key s [:meta \x])           ;; opens M-x mini
+        _ (is (some? (:mini s1)))
+        s2 (ed/handle-key s1 [:ctrl \s])]          ;; would have started isearch
+    (is (some? (:mini s2)))
+    (is (nil?  (:isearch s2)))))
+
+(deftest mini-start-refuses-second-minibuffer
+  ;; Regression: opening a second minibuffer over the first used to
+  ;; overwrite :mini, losing the outer prompt's on-done / prev-buf.
+  (let [s  (make-state "" 0)
+        s1 (ed/handle-key s [:meta \x])
+        p1 (:prev-buf (:mini s1))
+        s2 (ed/handle-key s1 [:meta \:])]         ;; would open another mini
+    (is (= p1 (:prev-buf (:mini s2))))))
