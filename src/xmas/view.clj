@@ -43,7 +43,9 @@
 
 ;; --- Low-level writing within a rect ---
 
-(defn- pad-spaces [n] (apply str (repeat n \space)))
+(defn- pad-spaces [n] (.repeat " " (max 0 (long n))))
+
+(defn- set-face! [face] (t/sg (get faces face (:default faces))))
 
 (defn- write-spans!
   "Write row at (screen-row, screen-col) with face spans. Content is clipped
@@ -59,12 +61,12 @@
         ;; visible display width used
         used-cols (cond-> (text/display-width glyphs start end)
                     scrolled inc)]
-    (when scrolled (t/sg (:default faces)) (t/tw "$"))
+    (when scrolled (set-face! :default) (t/tw "$"))
     (doseq [[from to face] spans]
       (let [a (max (long from) start)
             b (min (long to) end)]
         (when (< a b)
-          (t/sg (get faces face (:default faces)))
+          (set-face! face)
           (t/tw (subs glyphs a b)))))
     (t/reset-sg)
     (when (< used-cols width)
@@ -75,7 +77,7 @@
    trailing window rows and to paint dividers."
   [screen-row screen-col width face]
   (t/move screen-row screen-col)
-  (t/sg (get faces face (:default faces)))
+  (set-face! face)
   (t/tw (pad-spaces width))
   (t/reset-sg))
 
