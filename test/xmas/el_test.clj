@@ -321,6 +321,15 @@
 (deftest eval-t
   (is (true? (ev "t"))))
 
+(deftest eval-vector-is-self-evaluating
+  ;; Regression: `(vector? form) (mapv eval form)` tried to evaluate each
+  ;; element, so literal vectors of unbound symbols — common in keymap
+  ;; syntax — signaled void-variable. Emacs treats vectors as self-
+  ;; evaluating data.
+  (is (= [1 2 3]        (ev "[1 2 3]")))
+  (is (= '[a b c]       (ev "[a b c]")))
+  (is (= '[[1 2] [3 4]] (ev "[[1 2] [3 4]]"))))
+
 ;; --- Arithmetic ---
 
 (deftest eval-add

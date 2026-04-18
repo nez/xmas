@@ -756,7 +756,12 @@
     (number? form)  form
     (string? form)  form
     (char? form)    form
-    (vector? form)  (mapv eval form)
+    ;; Vectors are self-evaluating in Emacs Lisp — their elements are NOT
+    ;; evaluated. Mapping eval over them (as before) broke literal key
+    ;; vectors like `[?\C-x ?\C-s]` containing symbols, and any literal
+    ;; containing unbound symbols would signal void-variable instead of
+    ;; just being a data vector.
+    (vector? form)  form
     (true? form)    true
     (false? form)   false
 
