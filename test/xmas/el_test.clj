@@ -811,6 +811,14 @@
     (el/eval-string "(defvar x 10)" ed)
     (is (= 99 (get @(:el-vars @ed) 'x)))))
 
+(deftest eval-defvar-no-default-does-not-bind
+  ;; Regression: `(defvar x)` without a default used to bind x to nil, so
+  ;; (boundp 'x) returned t. Emacs distinguishes declare-only from bind-to-nil.
+  (let [ed (make-editor "")]
+    (el/eval-string "(defvar forward-decl)" ed)
+    (is (not (contains? @(:el-vars @ed) 'forward-decl)))
+    (is (false? (el/eval-string "(boundp 'forward-decl)" ed)))))
+
 (deftest eval-toggle-minor-mode
   (let [ed (make-editor "hi")]
     (el/eval-string

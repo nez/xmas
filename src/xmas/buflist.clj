@@ -65,14 +65,17 @@
   [s]
   (if-let [b (entry-at-point s)]
     (let [target (:name b)
+          p (:point (cmd/cur s))
           s' (-> s
                  (update :bufs dissoc target)
                  ;; windows showing the killed buffer fall back to the buflist
                  (update :windows win/replace-buffer target buflist-name))
           s' (cond-> s'
-               (= target (:buf s')) (assoc :buf buflist-name))]
+               (= target (:buf s')) (assoc :buf buflist-name))
+          fresh (make-buffer (:bufs s') (next-version s'))]
       (-> s'
-          (assoc-in [:bufs buflist-name] (make-buffer (:bufs s') (next-version s')))
+          (assoc-in [:bufs buflist-name]
+                    (assoc fresh :point (min p (count (:text fresh)))))
           (cmd/msg (str "Killed " target))))
     s))
 

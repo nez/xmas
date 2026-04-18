@@ -6,8 +6,9 @@
   "Convert src/xmas/foo.clj -> xmas.foo"
   [^String path]
   (when (.endsWith path ".clj")
-    (-> path
-        (.replace "src/" "")
+    ;; Strip only the LEADING `src/` — `.replace` replaces every occurrence
+    ;; which would chew up nested paths like `src/xmas/src/foo.clj`.
+    (-> (if (.startsWith path "src/") (subs path 4) path)
         (.replace "/" ".")
         (.replace "_" "-")
         (.replace ".clj" "")

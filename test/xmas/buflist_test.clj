@@ -49,3 +49,16 @@
         ;; point at line 0 = header
         s' (buflist/kill s)]
     (is (contains? (:bufs s') "a"))))
+
+(deftest kill-preserves-point
+  ;; Regression: buflist/kill used to rebuild the *Buffer List* buffer
+  ;; with point=0, so the cursor jumped to the header after pressing `k`.
+  (let [s0 (state-with-bufs {"a" (buf/make "a" "" nil)
+                             "b" (buf/make "b" "" nil)
+                             "c" (buf/make "c" "" nil)} "a")
+        s  (buflist/open s0)
+        ;; move to line 2 = "b"
+        s  (cmd/update-cur s #(assoc % :point (gap/nth-line-start (:text %) 2)))
+        p-before (:point (cmd/cur s))
+        s' (buflist/kill s)]
+    (is (= p-before (:point (cmd/cur s'))))))

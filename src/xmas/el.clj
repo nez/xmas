@@ -328,13 +328,16 @@
 
 (defn- eval-defvar
   "(defvar name &optional default docstring) — declare a variable; if already
-   bound, keep existing value."
-  [[name default docstring]]
-  (when-not (contains? @*vars* name)
-    (swap! *vars* assoc name (when default (eval default))))
-  (when (string? docstring)
-    (swap! *state* assoc-in [:custom-docs name] docstring))
-  name)
+   bound, keep existing value. `(defvar x)` with no default DECLARES without
+   binding (matches Emacs — `(boundp 'x)` returns nil)."
+  [args]
+  (let [[name & more] args
+        [default docstring] more]
+    (when (and (seq more) (not (contains? @*vars* name)))
+      (swap! *vars* assoc name (eval default)))
+    (when (string? docstring)
+      (swap! *state* assoc-in [:custom-docs name] docstring))
+    name))
 
 (defn- eval-while [[test & body]]
   (loop []
