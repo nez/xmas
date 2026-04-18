@@ -86,16 +86,17 @@
   [tree path]
   (if (empty? path)
     [tree path]
-    (let [parent-path (pop (vec path))
-          side        (peek (vec path))
+    (let [path        (vec path)
+          parent-path (pop path)
+          side        (peek path)
           sibling     (get-in tree (conj parent-path (if (= side :a) :b :a)))
           new-tree    (if (seq parent-path)
                         (assoc-in tree parent-path sibling)
                         sibling)
           ;; pick first leaf under the promoted sibling
-          new-path (if (leaf? sibling)
-                     parent-path
-                     (into (vec parent-path) (first (leaves sibling))))]
+          new-path    (if (leaf? sibling)
+                        parent-path
+                        (into parent-path (first (leaves sibling))))]
       [new-tree new-path])))
 
 (defn only

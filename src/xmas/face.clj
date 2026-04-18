@@ -64,26 +64,26 @@
 (defn- lisp-normal
   "Tokenize `line` starting at `start` in :normal state. Returns [spans end-state]."
   [^String line specials ^long start]
-  (let [n (.length line)]
+  (let [n (.length line)
+        flush (fn [acc prev i end face]
+                (-> acc (emit prev i :default) (emit i end face)))]
     (loop [i start acc [] prev start]
       (if (>= i n)
         [(emit acc prev n :default) :normal]
         (let [c (.charAt line i)]
           (cond
             (= c \;)
-            [(-> acc (emit prev i :default) (emit i n :comment)) :normal]
+            [(flush acc prev i n :comment) :normal]
 
             (= c \")
             (if-let [close (scan-string-close line (inc i))]
-              (recur (inc close)
-                     (-> acc (emit prev i :default) (emit i (inc close) :string))
-                     (inc close))
-              [(-> acc (emit prev i :default) (emit i n :string)) :in-string])
+              (recur (inc close) (flush acc prev i (inc close) :string) (inc close))
+              [(flush acc prev i n :string) :in-string])
 
             (= c \:)
             (let [end (sym-end line (inc i))]
               (if (> end (inc i))
-                (recur end (-> acc (emit prev i :default) (emit i end :keyword)) end)
+                (recur end (flush acc prev i end :keyword) end)
                 (recur (inc i) acc prev)))
 
             (and (not (Character/isWhitespace c))
@@ -91,7 +91,7 @@
             (let [end (sym-end line i)]
               (if (and (> end i)
                        (contains? specials (.substring line i end)))
-                (recur end (-> acc (emit prev i :default) (emit i end :builtin)) end)
+                (recur end (flush acc prev i end :builtin) end)
                 (recur end acc prev)))
 
             :else
