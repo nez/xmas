@@ -144,9 +144,15 @@
 (def undo (replay-cmd :undo buf/undo "undo"))
 (def redo (replay-cmd :redo buf/redo "redo"))
 
+(declare ensure-fallback-buf)
+
 (defn keyboard-quit [s]
   (msg (if (:mini s)
-         (assoc s :buf (:prev-buf (:mini s)) :mini nil)
+         ;; If the saved prev-buf was killed while the minibuffer was
+         ;; open, fall back so :buf never ends up pointing at a missing
+         ;; entry.
+         (let [[s target] (ensure-fallback-buf s (:prev-buf (:mini s)))]
+           (assoc s :buf target :mini nil))
          (update-cur s #(assoc % :mark nil)))
        "Quit"))
 
@@ -259,10 +265,12 @@
           s due))
 
 (defn- spit-due!
-  "Write each [_ file text] tuple to its auto-save path, swallowing errors."
+  "Write each [_ file text] tuple to its auto-save path, swallowing errors.
+   Uses atomic-spit so a crash mid-write can't leave the backup truncated —
+   the whole point of the backup is to be usable after unclean shutdown."
   [due]
   (doseq [[_ file text] due]
-    (try (spit (auto-save-path file) text :encoding "UTF-8")
+    (try (atomic-spit (auto-save-path file) text)
          (catch Exception _))))
 
 (defn auto-save!
@@ -343,11 +351,24 @@
                        :history-idx -1 :completer completer})
          (assoc :buf mini-buf-name)))))
 
+(defn- ensure-fallback-buf
+  "Return [state target] — pick a buffer to restore to when the saved
+   target is gone. Prefers an existing non-hidden buffer, otherwise
+   creates *scratch* so :buf never points at a missing entry."
+  [s prev-buf]
+  (cond
+    (contains? (:bufs s) prev-buf) [s prev-buf]
+    :else
+    (if-let [n (first (remove #(.startsWith ^String % " ") (keys (:bufs s))))]
+      [s n]
+      [(assoc-in s [:bufs "*scratch*"] (buf/make "*scratch*")) "*scratch*"])))
+
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
-    (let [input (str (:text (cur s)))]
+    (let [input  (str (:text (cur s)))
+          [s target] (ensure-fallback-buf s prev-buf)]
       (-> s
-          (assoc :buf prev-buf :mini nil)
+          (assoc :buf target :mini nil)
           (update :mini-history #(if (and (seq input) (not= input (peek %)))
                                    (conj (or % []) input) (or % [])))
           (on-done input)))

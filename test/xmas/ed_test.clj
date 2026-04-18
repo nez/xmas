@@ -954,6 +954,20 @@
     (is (= "abc" (text s')))
     (is (nil? (:mini s')))))
 
+(deftest mini-accept-falls-back-when-prev-buf-killed
+  ;; Regression: if the buffer saved as :prev-buf was killed while the
+  ;; minibuffer was open, mini-accept used to restore :buf to that
+  ;; dead name — every downstream (cur s) would then return nil.
+  (let [s  (make-state "hi" 0)
+        s1 (ed/handle-key s [:meta \x])         ;; open M-x
+        ;; externally kill *test* while mini is active
+        s2 (update s1 :bufs dissoc "*test*")
+        ;; fire a benign on-done that just ignores the input
+        s2 (assoc-in s2 [:mini :on-done] (fn [s _] s))
+        s3 (ed/handle-key s2 :return)]
+    (is (nil? (:mini s3)))
+    (is (contains? (:bufs s3) (:buf s3)))))
+
 ;; --- Mini history dedup ---
 
 (deftest mini-history-no-duplicate

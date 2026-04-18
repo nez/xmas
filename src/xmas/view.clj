@@ -301,6 +301,12 @@
    leave scroll/hscroll untouched."
   [state]
   (let [rows (:rows state) cols (:cols state)
+        ;; Minimum sensible frame is 2 rows (one body + echo area). Smaller
+        ;; values (terminals being resized, stale :rows from SIGWINCH storms)
+        ;; would produce negative body-rows and ANSI cursor moves to row 0
+        ;; or below — clamp up front.
+        rows (max 2 (long rows))
+        cols (max 1 (long cols))
         window-rows (dec rows)   ; reserve last row for echo area
         tree (:windows state)
         layouts (win/layout tree window-rows cols)
