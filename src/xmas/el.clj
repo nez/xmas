@@ -209,16 +209,16 @@
         vals (mapv (fn [[_ init]] (eval init)) pairs)]
     (with-scope syms vals #(eval-body body))))
 
-(defn- eval-defun [[name arglist & body]]
-  (swap! *fns* assoc name {:args (vec arglist) :body body})
+(defn- register-fn!
+  "Install a {:args :body} entry into `tbl` for `name`. Shared by defun and
+   defmacro — the two differ only in whether arguments are evaluated at the
+   call site (see eval's dispatch), not in storage shape."
+  [tbl [name arglist & body]]
+  (swap! tbl assoc name {:args (vec arglist) :body body})
   name)
 
-(defn- eval-defmacro
-  "(defmacro name (args...) body...) — register a macro whose body is run on
-   unevaluated arguments to produce an expansion."
-  [[name arglist & body]]
-  (swap! *macros* assoc name {:args (vec arglist) :body body})
-  name)
+(defn- eval-defun    [args] (register-fn! *fns* args))
+(defn- eval-defmacro [args] (register-fn! *macros* args))
 
 (declare eval-quasi)
 
@@ -296,17 +296,11 @@
                (:emacs/value data)
                (throw e)))))))
 
-(defn- eval-define-derived-mode
-  "(define-derived-mode name parent docstring body...) — parent and docstring
-   are accepted for compatibility but not used yet."
-  [[name & _]]
-  (swap! *state* mode/register name :major)
-  name)
-
-(defn- eval-define-minor-mode
-  "(define-minor-mode name docstring body...) — docstring ignored for now."
-  [[name & _]]
-  (swap! *state* mode/register name :minor)
+(defn- eval-define-mode
+  "define-(derived|minor)-mode — register `name` under `kind`. Parent /
+   docstring / body are accepted for compatibility but not used yet."
+  [kind [name & _]]
+  (swap! *state* mode/register name kind)
   name)
 
 (defn- eval-defcustom
@@ -744,8 +738,8 @@
         let     (eval-let args)
         defun   (eval-defun args)
         defmacro (eval-defmacro args)
-        define-derived-mode (eval-define-derived-mode args)
-        define-minor-mode   (eval-define-minor-mode args)
+        define-derived-mode (eval-define-mode :major args)
+        define-minor-mode   (eval-define-mode :minor args)
         defcustom           (eval-defcustom args)
         defgroup            (eval-defgroup args)
         defvar              (eval-defvar args)

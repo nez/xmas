@@ -928,9 +928,7 @@
                         {:num (+ (* 10 (or (:num pa) 0))
                                  (- (int key) (int \0)))})
                  :else
-                 (let [binding (or (mode/lookup-key s key)
-                                   (get (:el-bindings s) key)
-                                   (get bindings key))
+                 (let [binding (resolve-binding s key)
                        s' (cond
                             (map? binding) (assoc s :pending binding)
                             (fn? binding)  (binding s)
