@@ -5,14 +5,14 @@
 
 ;; Raw terminal via stty + System.in/out. No JLine.
 
+(defn- sh [^String cmd]
+  (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" cmd])))
+
 (defn stty! [& args]
-  (let [cmd (into-array String ["sh" "-c" (str "stty " (str/join " " args) " </dev/tty")])
-        p (.exec (Runtime/getRuntime) cmd)]
-    (.waitFor p)))
+  (.waitFor (sh (str "stty " (str/join " " args) " </dev/tty"))))
 
 (defn terminal-size []
-  (let [p (.exec (Runtime/getRuntime) (into-array String ["sh" "-c" "stty size </dev/tty"]))
-        out (slurp (.getInputStream p))
+  (let [out (slurp (.getInputStream (sh "stty size </dev/tty")))
         [r c] (str/split (str/trim out) #"\s+")]
     [(Integer/parseInt r) (Integer/parseInt c)]))
 
