@@ -1126,6 +1126,18 @@
         s4 (ed/handle-key s3 :return)]
     (is (= 8 (point s4)))))
 
+(deftest isearch-backward-extend-keeps-match-anchored
+  ;; Regression: extending a backward-isearch pattern used `(inc p)` as the
+  ;; search upper bound, which only kept the current match visible for pn=1.
+  ;; Typing a second char jumped to an earlier (sometimes irrelevant) match.
+  (let [s  (make-state "ab cd ab" 8)
+        s1 (ed/handle-key s [:ctrl \r])      ;; start backward
+        s2 (ed/handle-key s1 \a)             ;; pattern "a"  -> finds pos 6
+        s3 (ed/handle-key s2 \b)             ;; pattern "ab" -> must stay at 6
+        s4 (ed/handle-key s3 :return)]
+    (is (= 6 (point s3)))
+    (is (= 6 (point s4)))))
+
 ;; --- Goto line via M-g binding ---
 
 (deftest goto-line-via-binding

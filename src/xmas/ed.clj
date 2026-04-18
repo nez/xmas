@@ -470,7 +470,10 @@
       s
       (let [found (if (= direction :forward)
                     (text/search-forward  t pattern (if extend? p (min (+ p pn) tn)))
-                    (text/search-backward t pattern (if extend? (inc p) p)))]
+                    ;; Extend: allow the match starting at p (ending at p+pn)
+                    ;; to stay anchored. (inc p) only worked for pn=1 — multi-
+                    ;; char patterns were yanked away from the current match.
+                    (text/search-backward t pattern (if extend? (+ p pn) p)))]
         (if found
           (set-point s (fn [_ _] found))
           (msg s (str "Failing I-search: " pattern)))))))
