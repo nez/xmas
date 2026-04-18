@@ -236,6 +236,14 @@
     (is (contains? (:bufs s') "*new*"))
     (is (= "" (text s')))))
 
+(deftest switch-buffer-rejects-reserved-names
+  ;; Regression: switch-buffer used to let the user switch into " *mini*"
+  ;; (or any leading-space reserved name), wedging the minibuffer slot.
+  (let [s  (make-state "abc" 0)
+        s' (ed/switch-buffer s " *mini*")]
+    (is (= "*test*" (:buf s')))
+    (is (.contains ^String (:msg s') "Reserved"))))
+
 (deftest find-file-test
   (let [f (java.io.File/createTempFile "xmas-test" ".txt")]
     (try

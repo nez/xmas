@@ -211,7 +211,7 @@
           (.write os (.getBytes stdin "UTF-8")))
         (.close (.getOutputStream p)))
       (.waitFor p)
-      (slurp (.getInputStream p)))
+      (slurp (.getInputStream p) :encoding "UTF-8"))
     (catch Exception e (str "Error: " (.getMessage e)))))
 
 (defn shell-command-on-region
@@ -294,15 +294,16 @@
       (swap! editor-atom reset-edit-counts due))))
 
 (defn save-buffer [s]
-  (let [b (cur s)]
-    (if-let [f (:file b)]
+  (let [b (cur s)
+        f (:file b)]
+    (if (str/blank? f)
+      (msg s "No file")
       (try (atomic-spit f (str (:text b)))
            (let [bak (java.io.File. (auto-save-path f))]
              (when (.exists bak) (.delete bak)))
            (-> s (update-cur #(assoc % :modified false :edit-count 0))
                  (msg (str "Wrote " f)))
-           (catch Exception e (msg-error s "Save failed" e)))
-      (msg s "No file"))))
+           (catch Exception e (msg-error s "Save failed" e))))))
 
 (defn- detect-eol [^String s] (if (re-find #"\r\n" s) :crlf :lf))
 (defn- normalize-eol [^String s]
@@ -315,13 +316,17 @@
 
 (defn- file-info [filename]
   (let [f (.getAbsoluteFile (java.io.File. filename))]
-    {:path (.getCanonicalPath f) :name (.getName f) :exists (.exists f)}))
+    {:path (.getCanonicalPath f) :name (.getName f)
+     :exists (.exists f) :dir? (.isDirectory f)}))
 
 (defn find-file [s filename]
-  (let [{:keys [path name exists]} (file-info filename)]
+  (let [{:keys [path name exists dir?]} (file-info filename)]
     (cond
       ;; already open — just switch to it, don't clobber in-memory edits
       (contains? (:bufs s) path) (cmd/set-cur-buffer s path)
+
+      ;; Opening a directory drops into dired, matching Emacs's C-x C-f.
+      dir? (dired/open s path)
 
       exists
       (try (let [raw (slurp path :encoding "UTF-8")]
@@ -332,9 +337,14 @@
       :else (-> (open-buf s path (buf/make name "" path)) (msg "(New file)")))))
 
 (defn switch-buffer [s name]
-  (if (cmd/buf s name)
-    (cmd/set-cur-buffer s name)
-    (-> s (assoc-in [:bufs name] (buf/make name)) (cmd/set-cur-buffer name))))
+  (cond
+    (str/blank? name) s
+    ;; Reserve internal buffer names (leading space) — letting the user
+    ;; switch into " *mini*" would wedge the minibuffer machinery on the
+    ;; next prompt.
+    (.startsWith ^String name " ") (msg s (str "Reserved buffer name: " name))
+    (cmd/buf s name) (cmd/set-cur-buffer s name)
+    :else (-> s (assoc-in [:bufs name] (buf/make name)) (cmd/set-cur-buffer name))))
 
 ;; --- Minibuffer ---
 
