@@ -887,6 +887,20 @@
         (is (= :crlf (:line-ending (ed/cur s')))))
       (finally (.delete f)))))
 
+(deftest save-buffer-preserves-crlf
+  ;; Regression: save-buffer used to write (str (:text b)) verbatim — i.e.
+  ;; always LF — silently rewriting a CRLF file on disk as LF.
+  (let [f (java.io.File/createTempFile "xmas-crlf-save" ".txt")]
+    (try
+      (let [os (java.io.FileOutputStream. f)]
+        (.write os (.getBytes "a\r\nb\r\n"))
+        (.close os))
+      (let [s  (ed/find-file (make-state "" 0) (.getAbsolutePath f))
+            s' (ed/save-buffer s)]
+        (is (not (:modified (ed/cur s'))))
+        (is (= "a\r\nb\r\n" (slurp f :encoding "UTF-8"))))
+      (finally (.delete f)))))
+
 ;; --- Non-printable key ignored ---
 
 (deftest handle-key-control-char-below-space

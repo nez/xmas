@@ -293,7 +293,13 @@
         f (:file b)]
     (if (str/blank? f)
       (msg s "No file")
-      (try (atomic-spit f (str (:text b)))
+      (try (let [raw  (str (:text b))
+                 ;; Preserve the EOL style the file had on read. Without
+                 ;; this, opening and saving a CRLF file silently rewrote
+                 ;; it as LF — a destructive edit we didn't intend.
+                 bytes (if (= :crlf (:line-ending b))
+                         (str/replace raw "\n" "\r\n") raw)]
+             (atomic-spit f bytes))
            (let [bak (java.io.File. (auto-save-path f))]
              (when (.exists bak) (.delete bak)))
            (-> s (update-cur #(assoc % :modified false :edit-count 0))
