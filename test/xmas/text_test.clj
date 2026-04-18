@@ -227,3 +227,9 @@
 (deftest search-backward-from-zero-is-nil
   ;; Regression: nothing can be strictly before position 0.
   (is (nil? (text/search-backward "abc" "a" 0))))
+
+(deftest search-backward-pattern-longer-than-text
+  ;; Regression: pattern longer than the text used to trigger IOOBE because
+  ;; `start` clamped to 0 and match-at? read past the end.
+  (is (nil? (text/search-backward "ab" "abcde" 2)))
+  (is (nil? (text/search-backward "x" "xy" 1))))

@@ -36,7 +36,7 @@
                        (recur))
         :else      (unread-ch rdr ch)))))
 
-(def ^:private delimiters #{\( \) \[ \] \" \' \; })
+(def ^:private delimiters #{\( \) \[ \] \" \' \; \` \,})
 
 (defn- delimiter? [ch]
   (or (nil? ch) (ws? ch) (contains? delimiters ch)))
@@ -75,6 +75,18 @@
   (let [form (read rdr)]
     (when (= form ::eof) (err "Unexpected EOF after quote"))
     (list 'quote form)))
+
+(defn- read-quasi [^PushbackReader rdr]
+  (let [form (read rdr)]
+    (when (= form ::eof) (err "Unexpected EOF after `"))
+    (list 'quasiquote form)))
+
+(defn- read-unquote [^PushbackReader rdr]
+  (let [splice? (= \@ (peek-ch rdr))]
+    (when splice? (read-ch rdr))
+    (let [form (read rdr)]
+      (when (= form ::eof) (err "Unexpected EOF after ,"))
+      (list (if splice? 'unquote-splicing 'unquote) form))))
 
 (defn- read-char-literal [^PushbackReader rdr]
   (let [ch (read-ch rdr)]
@@ -120,6 +132,8 @@
         \[ (read-seq rdr \] "vector" identity)
         \] (err "Unexpected ']'")
         \' (read-quote rdr)
+        \` (read-quasi rdr)
+        \, (read-unquote rdr)
         \? (read-char-literal rdr)
         (do (unread-ch rdr ch) (read-token rdr))))))
 
@@ -140,10 +154,20 @@
 
 (def ^:dynamic *vars* nil)    ;; atom {symbol → value}
 (def ^:dynamic *fns* nil)     ;; atom {symbol → {:args [...] :body [...]}}
+(def ^:dynamic *macros* nil)  ;; atom {symbol → {:args [...] :body [...]}}
 (def ^:dynamic *state* nil)   ;; atom of editor state
 (def ^:dynamic *original* nil);; thunk invoked by (call-original) inside :around advice
 
 (declare eval apply-user-fn)
+
+;; --- Errors / non-local exits ---
+;; Represented as Clojure ExceptionInfo values carrying :emacs/signal or :emacs/throw.
+
+(defn- elisp-signal-ex [sym data]
+  (ex-info (str "elisp signal " sym) {:emacs/signal sym :emacs/data data}))
+
+(defn- elisp-throw-ex [tag value]
+  (ex-info (str "elisp throw " tag) {:emacs/throw tag :emacs/value value}))
 
 ;; --- Special forms ---
 
@@ -188,6 +212,89 @@
 (defn- eval-defun [[name arglist & body]]
   (swap! *fns* assoc name {:args (vec arglist) :body body})
   name)
+
+(defn- eval-defmacro
+  "(defmacro name (args...) body...) — register a macro whose body is run on
+   unevaluated arguments to produce an expansion."
+  [[name arglist & body]]
+  (swap! *macros* assoc name {:args (vec arglist) :body body})
+  name)
+
+(declare eval-quasi)
+
+(defn- eval-quasi-list
+  "Walk a list at `level`, splicing unquote-splicing forms at level 0."
+  [items level]
+  (apply list
+    (mapcat (fn [item]
+              (if (and (seq? item) (= 'unquote-splicing (first item)) (zero? level))
+                (let [v (eval (second item))]
+                  (if (sequential? v) v (list v)))
+                [(eval-quasi item level)]))
+            items)))
+
+(defn eval-quasi
+  "Expand `` `form `` respecting nested levels. At level 0, `(unquote x)` → `(eval x)`."
+  [form level]
+  (cond
+    (and (seq? form) (= 'quasiquote (first form)))
+    (list 'quasiquote (eval-quasi (second form) (inc level)))
+
+    (and (seq? form) (= 'unquote (first form)))
+    (if (zero? level)
+      (eval (second form))
+      (list 'unquote (eval-quasi (second form) (dec level))))
+
+    (and (seq? form) (= 'unquote-splicing (first form)))
+    (if (zero? level)
+      (err "unquote-splicing outside list")
+      (list 'unquote-splicing (eval-quasi (second form) (dec level))))
+
+    (seq? form) (eval-quasi-list form level)
+    (vector? form) (vec (eval-quasi-list form level))
+    :else form))
+
+(defn- match-condition?
+  "Does the raised `sig` satisfy the handler condition? `cond` is either a
+   specific symbol, `error` (matches any signal), or `t` (matches anything)."
+  [cond sig]
+  (or (= cond 't) (= cond 'error) (= cond sig)))
+
+(defn- eval-condition-case
+  "(condition-case VAR BODY HANDLERS...) where each HANDLER is (CONDITION BODY...)."
+  [[var-sym body & handlers]]
+  (try (eval body)
+       (catch clojure.lang.ExceptionInfo e
+         (let [data (ex-data e)
+               sig  (:emacs/signal data)]
+           (if-not sig
+             (throw e)
+             (if-let [[_ & hbody] (some (fn [[cond :as h]]
+                                          (when (match-condition? cond sig) h))
+                                        handlers)]
+               (if (or (nil? var-sym) (= var-sym 'nil))
+                 (eval-body hbody)
+                 (with-scope [var-sym]
+                             [(cons sig (or (:emacs/data data) (list)))]
+                             #(eval-body hbody)))
+               (throw e)))))))
+
+(defn- eval-unwind-protect
+  "(unwind-protect BODY UNWINDFORMS...) — UNWINDFORMS always run on exit."
+  [[body & unwinds]]
+  (try (eval body)
+       (finally (eval-body unwinds))))
+
+(defn- eval-catch
+  "(catch TAG BODY...) — captures `(throw TAG VALUE)`."
+  [[tag & body]]
+  (let [tv (eval tag)]
+    (try (eval-body body)
+         (catch clojure.lang.ExceptionInfo e
+           (let [data (ex-data e)]
+             (if (and (contains? data :emacs/throw) (= tv (:emacs/throw data)))
+               (:emacs/value data)
+               (throw e)))))))
 
 (defn- eval-define-derived-mode
   "(define-derived-mode name parent docstring body...) — parent and docstring
@@ -297,6 +404,63 @@
     (swap! *state* assoc :msg m)
     m))
 
+;; --- Error / non-local exit builtins ---
+
+(defn- el-signal [sym data]
+  (throw (elisp-signal-ex sym data)))
+
+(defn- el-error [& args]
+  (let [msg (if (and (string? (first args)) (seq (rest args)))
+              (apply format args) (str (first args)))]
+    (throw (elisp-signal-ex 'error (list msg)))))
+
+(defn- el-throw [tag value]
+  (throw (elisp-throw-ex tag value)))
+
+;; --- Symbol introspection ---
+
+(defn- el-symbol-function [sym]
+  (or (get @*fns* sym)
+      (when-let [b (get @(or *macros* (atom {})) sym)]
+        {:macro b})))
+
+(defn- el-symbol-value [sym]
+  (if-let [e (find @*vars* sym)] (val e)
+    (throw (elisp-signal-ex 'void-variable (list sym)))))
+
+(defn- el-boundp [sym] (contains? @*vars* sym))
+
+(declare builtins)
+
+(defn- el-fboundp [sym]
+  (boolean (or (contains? @*fns* sym)
+               (and *macros* (contains? @*macros* sym))
+               (contains? builtins sym))))
+
+(defn- el-fset [sym f]
+  (cond
+    (fn? f)  (swap! *fns* assoc sym {:args [] :body [] :clj f})  ; rare
+    (map? f) (swap! *fns* assoc sym f)
+    :else    (err (str "fset: not a function: " (pr-str f))))
+  sym)
+
+(defn- el-set [sym value]
+  (swap! *vars* assoc sym value)
+  value)
+
+(defn- el-makunbound [sym]
+  (swap! *vars* dissoc sym)
+  sym)
+
+;; --- Plist on state ---
+
+(defn- el-put [sym prop value]
+  (swap! *state* assoc-in [:plists sym prop] value)
+  value)
+
+(defn- el-get [sym prop]
+  (get-in @*state* [:plists sym prop]))
+
 ;; --- Key string parsing ---
 
 (def ^:private key-token-re #"\\C-(.)|\\M-(.)|\\(.)|(.)")
@@ -314,14 +478,16 @@
 ;; --- Keybinding bridge ---
 
 (defn- make-handler
-  "Wrap an elisp function symbol into a (state → state) handler."
+  "Wrap an elisp function symbol into a (state → state) handler. Resolves
+   the fn on each invocation so a later `defun` with the same name takes
+   effect on already-bound keys (matching Emacs semantics)."
   [func-sym]
-  (let [elisp-fn (or (get @*fns* func-sym)
-                     (err (str "Void function: " func-sym)))]
-    (bound-fn* (fn [s]
-                 (binding [*state* (atom s)]
-                   (apply-user-fn elisp-fn [])
-                   @*state*)))))
+  (bound-fn* (fn [s]
+               (binding [*state* (atom s)]
+                 (let [f (or (get @*fns* func-sym)
+                             (err (str "Void function: " func-sym)))]
+                   (apply-user-fn f []))
+                 @*state*))))
 
 (defn- el-global-set-key [key-str func-sym]
   (let [keys (parse-key-string key-str)]
@@ -487,7 +653,25 @@
    'delete-overlay   el-delete-overlay
    ;; packages
    'package-install  el-package-install
-   'package-load     el-package-load})
+   'package-load     el-package-load
+   ;; errors / non-local exits
+   'signal           el-signal
+   'error            el-error
+   'throw            el-throw
+   ;; symbols
+   'symbol-function  el-symbol-function
+   'symbol-value     el-symbol-value
+   'symbol-name      (fn [s] (name s))
+   'boundp           el-boundp
+   'fboundp          el-fboundp
+   'fset             el-fset
+   'set              el-set
+   'makunbound       el-makunbound
+   'consp            seq?
+   'atom             (fn [x] (not (and (seq? x) (seq x))))
+   ;; plists
+   'put              el-put
+   'get              el-get})
 
 ;; --- Eval ---
 
@@ -523,12 +707,16 @@
     (let [[head & args] form]
       (case head
         quote   (first args)
+        quasiquote (eval-quasi (first args) 0)
+        unquote (err "unquote outside backquote")
+        unquote-splicing (err "unquote-splicing outside backquote")
         if      (eval-if args)
         cond    (eval-cond args)
         progn   (eval-body args)
         setq    (eval-setq args)
         let     (eval-let args)
         defun   (eval-defun args)
+        defmacro (eval-defmacro args)
         define-derived-mode (eval-define-derived-mode args)
         define-minor-mode   (eval-define-minor-mode args)
         defcustom           (eval-defcustom args)
@@ -538,14 +726,19 @@
         while   (eval-while args)
         and     (eval-and args)
         or      (eval-or args)
-        ;; function call
-        (let [evaled-args (mapv eval args)
-              f (or (get @*fns* head)
-                    (get builtins head)
-                    (err (str "Void function: " head)))]
-          (if (map? f)
-            (apply-with-advice head f evaled-args)
-            (apply f evaled-args)))))
+        condition-case   (eval-condition-case args)
+        unwind-protect   (eval-unwind-protect args)
+        catch            (eval-catch args)
+        ;; function call — check macro table first
+        (if-let [mac (and *macros* (get @*macros* head))]
+          (eval (apply-user-fn mac args))
+          (let [evaled-args (mapv eval args)
+                f (or (get @*fns* head)
+                      (get builtins head)
+                      (err (str "Void function: " head)))]
+            (if (map? f)
+              (apply-with-advice head f evaled-args)
+              (apply f evaled-args))))))
 
     :else (err (str "Cannot eval: " (pr-str form)))))
 
@@ -555,17 +748,19 @@
 
 (defn- ensure-env! [editor-state]
   (swap! editor-state
-         #(-> % (update :el-vars (fn [x] (or x (atom {}))))
-                (update :el-fns  (fn [x] (or x (atom {})))))))
+         #(-> % (update :el-vars   (fn [x] (or x (atom {}))))
+                (update :el-fns    (fn [x] (or x (atom {}))))
+                (update :el-macros (fn [x] (or x (atom {})))))))
 
 (defn- with-el-env
   "Run f with elisp dynamic scope bound from editor-state's shared env atoms.
    (User keybindings go straight onto :el-bindings via `global-set-key`.)"
   [editor-state f]
   (ensure-env! editor-state)
-  (binding [*vars*  (:el-vars @editor-state)
-            *fns*   (:el-fns @editor-state)
-            *state* editor-state]
+  (binding [*vars*   (:el-vars   @editor-state)
+            *fns*    (:el-fns    @editor-state)
+            *macros* (:el-macros @editor-state)
+            *state*  editor-state]
     (f)))
 
 (defn eval-string

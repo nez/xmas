@@ -604,6 +604,19 @@
       (is (= "!hello" (str (:text (get (:bufs new-state) "*test*")))))
       (is (= 1 (:point (get (:bufs new-state) "*test*")))))))
 
+(deftest eval-global-set-key-picks-up-redefined-fn
+  ;; Regression: make-handler used to resolve the elisp fn at bind time,
+  ;; so a later `defun` with the same name didn't take effect on the
+  ;; already-bound key. Emacs resolves on each invocation.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun my-cmd () (insert \"A\")) (global-set-key \"\\\\C-t\" 'my-cmd))"
+      ed)
+    (el/eval-string "(defun my-cmd () (insert \"B\"))" ed)
+    (let [handler (get-in @ed [:el-bindings [:ctrl \t]])
+          new-state (handler @ed)]
+      (is (= "B" (str (:text (get (:bufs new-state) "*test*"))))))))
+
 ;; --- Modes ---
 
 (deftest eval-define-derived-mode
@@ -763,3 +776,194 @@
               (toggle-minor-mode 'my-minor))"
       ed)
     (is (= #{'my-minor} (:minor-modes (get (:bufs @ed) "*test*"))))))
+
+;; ============================================================
+;; Tier 1: Reader — backquote / unquote / unquote-splicing
+;; ============================================================
+
+(deftest read-backquote
+  (is (= '(quasiquote x) (r1 "`x"))))
+
+(deftest read-unquote
+  (is (= '(quasiquote (unquote x)) (r1 "`,x"))))
+
+(deftest read-unquote-splicing
+  (is (= '(quasiquote (unquote-splicing x)) (r1 "`,@x"))))
+
+(deftest read-quasi-inside-list
+  (is (= '(quasiquote (a (unquote b) c))
+         (r1 "`(a ,b c)"))))
+
+(deftest read-quasi-with-splice
+  (is (= '(quasiquote (a (unquote-splicing b) c))
+         (r1 "`(a ,@b c)"))))
+
+;; ============================================================
+;; Tier 1: Macros + defmacro
+;; ============================================================
+
+(deftest eval-defmacro-registers
+  (let [ed (make-editor "")]
+    (el/eval-string "(defmacro my-mac (x) (list (quote +) x 1))" ed)
+    (is (contains? @(:el-macros @ed) 'my-mac))))
+
+(deftest eval-macro-expands-at-call
+  ;; Macro receives unevaluated args; we expand then eval. Result should be
+  ;; `(+ 5 1)` = 6.
+  (let [ed (make-editor "")]
+    (el/eval-string "(defmacro add1 (x) (list (quote +) x 1))" ed)
+    (is (= 6 (el/eval-string "(add1 5)" ed)))))
+
+(deftest eval-macro-preserves-form-not-value
+  ;; Args are NOT evaluated before the macro body runs.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn
+         (defmacro quote-first (x y) (list (quote quote) x))
+         (setq answer (quote-first the-sym other-sym)))"
+      ed)
+    (is (= 'the-sym (get @(:el-vars @ed) 'answer)))))
+
+(deftest eval-macro-with-quasiquote
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn
+         (defmacro swap-args (a b) `(list ,b ,a))
+         (setq r (swap-args 1 2)))"
+      ed)
+    (is (= '(2 1) (get @(:el-vars @ed) 'r)))))
+
+(deftest eval-quasiquote-literal
+  (is (= '(1 2 3) (ev "`(1 2 3)"))))
+
+(deftest eval-quasiquote-with-unquote
+  (let [ed (make-editor "")]
+    (el/eval-string "(setq x 42)" ed)
+    (is (= '(1 42 3) (el/eval-string "`(1 ,x 3)" ed)))))
+
+(deftest eval-quasiquote-with-splice
+  (let [ed (make-editor "")]
+    (el/eval-string "(setq xs (list 2 3 4))" ed)
+    (is (= '(1 2 3 4 5) (el/eval-string "`(1 ,@xs 5)" ed)))))
+
+(deftest eval-macro-implementing-when
+  ;; &rest isn't supported yet, so calling the macro throws an arity error
+  ;; before `r` is assigned. See the next test for the working single-body
+  ;; variant. When &rest lands, rewrite this to assert `r = 3`.
+  (let [ed (make-editor "")]
+    (try
+      (el/eval-string
+        "(progn
+           (defmacro my-when (test &rest body)
+             `(if ,test (progn ,@body) nil))
+           (setq r (my-when t 1 2 3)))"
+        ed)
+      (catch Exception _))
+    (is (nil? (get @(:el-vars @ed) 'r)))))
+
+(deftest eval-macro-implementing-when-single-body
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn
+         (defmacro my-when (test body) `(if ,test ,body nil))
+         (setq r (my-when t 99)))"
+      ed)
+    (is (= 99 (get @(:el-vars @ed) 'r)))))
+
+;; ============================================================
+;; Tier 1: condition-case / unwind-protect / catch / throw
+;; ============================================================
+
+(deftest eval-signal-caught-by-handler
+  (is (= "caught"
+         (ev "(condition-case _ (signal 'my-err (list 1)) (my-err \"caught\"))"))))
+
+(deftest eval-condition-case-binds-variable
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(setq r (condition-case e (signal 'my-err (list 99)) (my-err e)))"
+      ed)
+    (is (= '(my-err 99) (get @(:el-vars @ed) 'r)))))
+
+(deftest eval-condition-case-unrelated-passes-through
+  (is (thrown? clojure.lang.ExceptionInfo
+               (ev "(condition-case _ (signal 'other-err nil) (my-err 1))"))))
+
+(deftest eval-condition-case-error-matches-any
+  (is (= "ok"
+         (ev "(condition-case _ (signal 'weird nil) (error \"ok\"))"))))
+
+(deftest eval-error-builtin-raises-error
+  (is (= "boom"
+         (ev "(condition-case _ (error \"boom\") (error \"boom\"))"))))
+
+(deftest eval-unwind-protect-runs-cleanup-on-success
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (setq trace nil)
+              (unwind-protect 1
+                (setq trace (cons 'cleanup trace))))"
+      ed)
+    (is (= '(cleanup) (get @(:el-vars @ed) 'trace)))))
+
+(deftest eval-unwind-protect-runs-cleanup-on-signal
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (setq trace nil)
+              (condition-case _
+                (unwind-protect (signal 'boom nil)
+                  (setq trace 'cleaned))
+                (boom nil)))"
+      ed)
+    (is (= 'cleaned (get @(:el-vars @ed) 'trace)))))
+
+(deftest eval-catch-throw-roundtrip
+  (is (= 99 (ev "(catch 'tag (throw 'tag 99))"))))
+
+(deftest eval-catch-normal-exit
+  (is (= 5 (ev "(catch 'tag (+ 2 3))"))))
+
+(deftest eval-throw-uncaught-raises
+  (is (thrown? clojure.lang.ExceptionInfo
+               (ev "(throw 'nope 1)"))))
+
+;; ============================================================
+;; Tier 1: Symbols — fset, boundp, fboundp, put/get
+;; ============================================================
+
+(deftest eval-boundp-bound
+  (let [ed (make-editor "")]
+    (el/eval-string "(setq x 1)" ed)
+    (is (true? (el/eval-string "(boundp 'x)" ed)))))
+
+(deftest eval-boundp-unbound
+  (is (false? (ev "(boundp 'not-defined)"))))
+
+(deftest eval-fboundp-builtin
+  (is (true? (ev "(fboundp '+)"))))
+
+(deftest eval-fboundp-user-fn
+  (let [ed (make-editor "")]
+    (el/eval-string "(defun f () 1)" ed)
+    (is (true? (el/eval-string "(fboundp 'f)" ed)))))
+
+(deftest eval-fboundp-macro
+  (let [ed (make-editor "")]
+    (el/eval-string "(defmacro m (x) x)" ed)
+    (is (true? (el/eval-string "(fboundp 'm)" ed)))))
+
+(deftest eval-put-get
+  (let [ed (make-editor "")]
+    (el/eval-string "(put 'x 'color 'red)" ed)
+    (is (= 'red (el/eval-string "(get 'x 'color)" ed)))))
+
+(deftest eval-set-updates-variable
+  (let [ed (make-editor "")]
+    (el/eval-string "(set 'x 7)" ed)
+    (is (= 7 (get @(:el-vars @ed) 'x)))))
+
+(deftest eval-makunbound-removes-variable
+  (let [ed (make-editor "")]
+    (el/eval-string "(setq x 1)" ed)
+    (el/eval-string "(makunbound 'x)" ed)
+    (is (not (contains? @(:el-vars @ed) 'x)))))

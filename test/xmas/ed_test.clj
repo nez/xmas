@@ -538,6 +538,15 @@
     (is (= "bbb" (text s1)))
     (is (.contains ^String (:msg s1) "3"))))
 
+(deftest qr-regexp-zero-width-does-not-loop
+  ;; Regression: a zero-width match (e.g. $) paired with an empty
+  ;; replacement left point un-advanced and the replacer refound the same
+  ;; match forever. qr-replace-here now nudges point past the zero match.
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "abc\ndef" 0) "$" "" true)
+        s1 (#'xmas.ed/qr-replace-all s0)]
+    (is (= "abc\ndef" (text s1)))
+    (is (nil? (:query-replace s1)))))
+
 ;; --- Shell command ---
 
 (deftest shell-command-single-line-goes-to-msg
@@ -748,9 +757,12 @@
 (deftest isearch-next-forward
   (let [s (make-state "abc abc abc" 0)
         s1 (ed/handle-key s [:ctrl \s])
-        s2 (ed/handle-key s1 \a)            ;; find 'a' at 4 (searches from inc(0)=1)
-        s3 (ed/handle-key s2 [:ctrl \s])]   ;; next → finds 'a' at 8
-    (is (= 8 (point s3)))))
+        s2 (ed/handle-key s1 \a)            ;; 'a' at point 0 — extend matches here
+        s3 (ed/handle-key s2 [:ctrl \s])    ;; C-s: advance past match → 'a' at 4
+        s4 (ed/handle-key s3 [:ctrl \s])]   ;; C-s again → 'a' at 8
+    (is (= 0 (point s2)))
+    (is (= 4 (point s3)))
+    (is (= 8 (point s4)))))
 
 (deftest isearch-non-search-key-accepts-and-dispatches
   (let [s (make-state "hello world" 0)

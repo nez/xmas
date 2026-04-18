@@ -410,15 +410,19 @@
 ;; --- Incremental search ---
 
 (defn- isearch-do
-  "Perform the search from current point in the given direction."
+  "Search from current point in :isearch's direction. When :extend? is true
+   (pattern just grew or shrank), include the current point as a candidate so
+   a match anchored there can grow/shrink; otherwise advance past the current
+   match so C-s/C-r finds the next occurrence."
   [s]
-  (let [{:keys [pattern direction]} (:isearch s)
-        b (cur s) t (:text b) p (:point b)]
+  (let [{:keys [pattern direction extend?]} (:isearch s)
+        b (cur s) t (:text b) p (:point b)
+        tn (count t) pn (count pattern)]
     (if (empty? pattern)
       s
       (let [found (if (= direction :forward)
-                    (text/search-forward t pattern (min (inc p) (count t)))
-                    (text/search-backward t pattern p))]
+                    (text/search-forward  t pattern (if extend? p (min (+ p pn) tn)))
+                    (text/search-backward t pattern (if extend? (inc p) p)))]
         (if found
           (set-point s (fn [_ _] found))
           (msg s (str "Failing I-search: " pattern)))))))
@@ -436,11 +440,12 @@
           (msg "Quit"))))
 
 (defn- isearch-append [s ch]
-  (-> s (update-in [:isearch :pattern] str ch)
+  (-> s (update :isearch assoc :extend? true)
+        (update-in [:isearch :pattern] str ch)
         isearch-do))
 
 (defn- isearch-next [s direction]
-  (-> s (assoc-in [:isearch :direction] direction)
+  (-> s (update :isearch assoc :direction direction :extend? false)
         isearch-do))
 
 (def ^:private isearch-keys
@@ -452,7 +457,8 @@
 (defn- isearch-backspace [s]
   (let [pat (get-in s [:isearch :pattern])]
     (if (seq pat)
-      (-> s (assoc-in [:isearch :pattern] (subs pat 0 (dec (count pat))))
+      (-> s (update :isearch assoc :extend? true)
+            (assoc-in [:isearch :pattern] (subs pat 0 (dec (count pat))))
             isearch-do)
       (isearch-cancel s))))
 
@@ -567,11 +573,18 @@
 (defn- qr-replace-here [s]
   (let [{:keys [to regex? match-end groups]} (:query-replace s)
         p (:point (cur s))
-        replacement (if regex? (expand-replacement to groups) to)]
-    (-> s
-        (edit p match-end replacement)
-        (update-in [:query-replace :count] (fnil inc 0))
-        qr-advance)))
+        replacement (if regex? (expand-replacement to groups) to)
+        zero-width? (= p match-end)
+        s2 (-> s (edit p match-end replacement)
+                 (update-in [:query-replace :count] (fnil inc 0)))]
+    (if zero-width?
+      ;; Zero-width match (e.g. regex `$` or `a*`): the next find would
+      ;; refind the same position. Advance point past it; if at EOF, exit.
+      (let [b (cur s2) pt (:point b) tn (count (:text b))]
+        (if (>= pt tn)
+          (qr-exit s2)
+          (qr-advance (update-cur s2 #(update % :point inc)))))
+      (qr-advance s2))))
 
 (defn- qr-replace-all [s]
   (loop [s s]

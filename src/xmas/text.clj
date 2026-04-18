@@ -111,8 +111,9 @@
   "Position of pattern in t before from, or nil."
   [^CharSequence t ^String pattern ^long from]
   (when (and (seq pattern) (pos? from))
-    (let [pn    (.length pattern)
-          start (min (dec from) (- (.length t) pn))]
-      (loop [i (long (max 0 start))]
-        (when (>= i 0)
-          (if (match-at? t pattern i) i (recur (dec i))))))))
+    (let [pn (.length pattern)
+          tn (.length t)]
+      (when (<= pn tn)
+        (loop [i (long (min (dec from) (- tn pn)))]
+          (when (>= i 0)
+            (if (match-at? t pattern i) i (recur (dec i)))))))))
