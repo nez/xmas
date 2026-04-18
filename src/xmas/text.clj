@@ -50,12 +50,15 @@
     :else 1))
 
 (defn display-width
-  "Total terminal columns for text[from..to)."
-  ^long [^CharSequence t ^long from ^long to]
-  (loop [p from w 0]
-    (if (>= p to) w
-      (let [cp (Character/codePointAt t (int p))]
-        (recur (+ p (Character/charCount cp)) (+ w (char-width cp)))))))
+  "Total terminal columns for text[from..to). The 1-arg overload measures
+   the whole CharSequence — a common enough pattern that spelling it out
+   as (display-width t 0 (count t)) at each call site was noise."
+  (^long [^CharSequence t] (display-width t 0 (.length t)))
+  (^long [^CharSequence t ^long from ^long to]
+   (loop [p from w 0]
+     (if (>= p to) w
+       (let [cp (Character/codePointAt t (int p))]
+         (recur (+ p (Character/charCount cp)) (+ w (char-width cp))))))))
 
 (defn word-forward
   "Position after the next word boundary."

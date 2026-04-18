@@ -187,7 +187,7 @@
                    (inc point-line) (inc cursor-col)
                    (clojure.core/name (or mode :fundamental))
                    (or minors ""))
-        mw (text/display-width ml 0 (count ml))
+        mw (text/display-width ml)
         padded (if (< mw cols)
                  (str ml (pad-spaces (- cols mw)))
                  (subs ml 0 (text/pos-at-col ml 0 (count ml) cols)))
@@ -261,10 +261,10 @@
             mb (get (:bufs state) (:buf state))
             input (str (:text mb))
             cursor (:point mb)
-            pw (text/display-width prompt 0 (count prompt))
+            pw (text/display-width prompt)
             avail (max 0 (- cols pw))
             input' (clip-to-cols input avail)
-            input-w (text/display-width input' 0 (count input'))
+            input-w (text/display-width input')
             ;; After the input, if there's room, show completion candidates.
             hint (when (seq candidates)
                    (clip-to-cols (str "  {" (str/join " " candidates) "}")
@@ -272,8 +272,7 @@
         (t/sg (:prompt faces)) (t/tw prompt)
         (t/reset-sg) (t/tw input')
         (when hint (t/tw hint))
-        (pad-to-cols! (+ pw input-w (if hint (text/display-width hint 0 (count hint)) 0))
-                      cols)
+        (pad-to-cols! (+ pw input-w (if hint (text/display-width hint) 0)) cols)
         (t/move mini-row (+ pw (min avail (text/display-width input 0 cursor)))))
 
       isearch
@@ -281,12 +280,12 @@
                    (:pattern isearch))
             p' (clip-to-cols p cols)]
         (t/sg (:prompt faces)) (t/tw p') (t/reset-sg)
-        (pad-to-cols! (text/display-width p' 0 (count p')) cols))
+        (pad-to-cols! (text/display-width p') cols))
 
       :else
       (let [m (clip-to-cols (or msg "") cols)]
         (t/reset-sg) (t/tw m)
-        (pad-to-cols! (text/display-width m 0 (count m)) cols)))))
+        (pad-to-cols! (text/display-width m) cols)))))
 
 ;; --- Frame signature (dirty-flag input) ---
 
