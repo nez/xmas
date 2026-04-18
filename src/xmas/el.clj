@@ -577,9 +577,7 @@
   "Return [buffer-name index] for the overlay with `id`, or nil.
    Looks in the overlay's recorded :buffer first, then falls back to scanning."
   [state id]
-  (let [scan (fn [ovs]
-               (some (fn [[i ov]] (when (= id (:id ov)) i))
-                     (map-indexed vector ovs)))
+  (let [scan #(first (keep-indexed (fn [i ov] (when (= id (:id ov)) i)) %))
         home (get-in state [:overlay-home id])]
     (or (when-let [i (scan (get-in state [:bufs home :overlays]))]
           [home i])

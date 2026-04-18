@@ -79,6 +79,10 @@
   [f s n]
   (nth (iterate f s) (max 0 (long n))))
 
+(defn- prefix-repeat
+  "Wrap a (state)→state command so it honors :prefix-arg by running n times."
+  [f] (fn [s] (let [[n s] (consume-arg s 1)] (repeat-cmd f s n))))
+
 (defn forward-char
   ([s]   (let [[n s] (consume-arg s 1)] (cmd/forward-char s n)))
   ([s n] (cmd/forward-char s n)))
@@ -87,14 +91,12 @@
   ([s]   (let [[n s] (consume-arg s 1)] (cmd/backward-char s n)))
   ([s n] (cmd/backward-char s n)))
 
-(defn forward-word  [s] (let [[n s] (consume-arg s 1)] (repeat-cmd cmd/forward-word  s n)))
-(defn backward-word [s] (let [[n s] (consume-arg s 1)] (repeat-cmd cmd/backward-word s n)))
-
-(defn next-line     [s] (let [[n s] (consume-arg s 1)] (repeat-cmd next-line-raw     s n)))
-(defn previous-line [s] (let [[n s] (consume-arg s 1)] (repeat-cmd previous-line-raw s n)))
-
-(defn delete-char          [s] (let [[n s] (consume-arg s 1)] (repeat-cmd cmd/delete-char s n)))
-(defn delete-backward-char [s] (let [[n s] (consume-arg s 1)] (repeat-cmd cmd/delete-backward-char s n)))
+(def forward-word         (prefix-repeat cmd/forward-word))
+(def backward-word        (prefix-repeat cmd/backward-word))
+(def next-line            (prefix-repeat next-line-raw))
+(def previous-line        (prefix-repeat previous-line-raw))
+(def delete-char          (prefix-repeat cmd/delete-char))
+(def delete-backward-char (prefix-repeat cmd/delete-backward-char))
 
 (defn self-insert [s key]
   (if (or (char? key) (string? key))
