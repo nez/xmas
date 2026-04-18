@@ -50,13 +50,9 @@
     (let [split (get-in tree ancestor-path)
           ratio (:ratio split 0.5)
           step  (/ (double delta) (max 1 (double total)))
-          min-r 0.1 max-r 0.9
-          new-ratio (cond-> (if (= side :a) (+ ratio step) (- ratio step))
-                      true (max min-r)
-                      true (min max-r))]
-      (if (seq ancestor-path)
-        (assoc-in tree (conj ancestor-path :ratio) new-ratio)
-        (assoc tree :ratio new-ratio)))
+          new-ratio (-> (if (= side :a) (+ ratio step) (- ratio step))
+                        (max 0.1) (min 0.9))]
+      (assoc-in tree (conj ancestor-path :ratio) new-ratio))
     tree))
 
 (defn leaves

@@ -164,7 +164,7 @@
                   spans0 (apply-overlays toks line-ovs pos len)
                   r-from (when r-lo (max 0 (min len (- (long r-lo) pos))))
                   r-to   (when r-lo (max 0 (min len (- (long r-hi) pos))))
-                  spans  (if r-from (merge-region spans0 r-from r-to) spans0)
+                  spans  (merge-region spans0 r-from r-to)
                   states' (if (> (count states) ln) states (conj states nxt-state))]
               (write-spans! (+ row r) col cols line spans hscroll)
               (recur (inc ln) (inc r) nxt-state states'))

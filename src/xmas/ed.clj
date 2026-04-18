@@ -258,15 +258,20 @@
               (assoc-in [:bufs name :edit-count] 0)))
           s due))
 
+(defn- spit-due!
+  "Write each [_ file text] tuple to its auto-save path, swallowing errors."
+  [due]
+  (doseq [[_ file text] due]
+    (try (spit (auto-save-path file) text :encoding "UTF-8")
+         (catch Exception _))))
+
 (defn auto-save!
   "For each file-backed buffer whose edit-count crossed the threshold,
    write its #name# backup and reset the counter. Returns the updated state.
    Do not call from inside a `swap!` — a CAS retry would re-spit the file."
   [s]
   (let [due (auto-save-due s)]
-    (doseq [[_ file text] due]
-      (try (spit (auto-save-path file) text :encoding "UTF-8")
-           (catch Exception _)))
+    (spit-due! due)
     (reset-edit-counts s due)))
 
 (defn- auto-save-tick!
@@ -275,9 +280,7 @@
   [editor-atom]
   (let [due (auto-save-due @editor-atom)]
     (when (seq due)
-      (doseq [[_ file text] due]
-        (try (spit (auto-save-path file) text :encoding "UTF-8")
-           (catch Exception _)))
+      (spit-due! due)
       (swap! editor-atom reset-edit-counts due))))
 
 (defn save-buffer [s]
