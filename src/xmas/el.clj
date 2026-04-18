@@ -567,19 +567,27 @@
               (:bufs state)))))
 
 (defn- el-overlay-put [id prop value]
-  (when-let [[buf idx] (find-overlay @*state* id)]
-    (let [k (kwify prop)
-          v (if (= k :face) (kwify value) value)]
-      (swap! *state* assoc-in [:bufs buf :overlays idx k] v)))
+  ;; Re-locate the overlay inside the swap fn so a concurrent mutation
+  ;; (nREPL / websocket) between `find-overlay` and `swap!` cannot make
+  ;; `idx` point at a different (or missing) overlay.
+  (let [k (kwify prop)
+        v (if (= k :face) (kwify value) value)]
+    (swap! *state*
+           (fn [s]
+             (if-let [[buf idx] (find-overlay s id)]
+               (assoc-in s [:bufs buf :overlays idx k] v)
+               s))))
   value)
 
 (defn- el-delete-overlay [id]
-  (when-let [[buf idx] (find-overlay @*state* id)]
-    (swap! *state* (fn [s]
-                     (-> s (update-in [:bufs buf :overlays]
-                                      (fn [ovs] (vec (concat (subvec ovs 0 idx)
-                                                              (subvec ovs (inc idx))))))
-                           (update :overlay-home dissoc id)))))
+  (swap! *state*
+         (fn [s]
+           (if-let [[buf idx] (find-overlay s id)]
+             (-> s (update-in [:bufs buf :overlays]
+                              (fn [ovs] (vec (concat (subvec ovs 0 idx)
+                                                      (subvec ovs (inc idx))))))
+                   (update :overlay-home dissoc id))
+             s)))
   nil)
 
 ;; --- Package manager bridge ---

@@ -1112,6 +1112,16 @@
         s3 (ed/handle-key s2 :return)]
     (is (= "3" (:msg s3)))))
 
+(deftest eval-expression-persists-state-changes
+  ;; Regression: eval-expression used to pass the global `editor` atom to
+  ;; el/eval-1, but runs inside `(swap! editor ...)`. Any `swap! *state*`
+  ;; from elisp was clobbered by the outer swap committing the old `s`.
+  (let [s  (make-state "" 0)
+        s1 (ed/handle-key s [:meta \:])
+        s2 (reduce #(ed/handle-key %1 %2) s1 (seq "(insert \"Z\")"))
+        s3 (ed/handle-key s2 :return)]
+    (is (= "Z" (text s3)))))
+
 ;; --- Elisp keybindings dispatch ---
 
 (deftest el-bindings-dispatch

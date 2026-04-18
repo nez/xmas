@@ -475,8 +475,15 @@
 ;; --- Eval expression (M-:) ---
 
 (defn- eval-expression [s input]
-  (try (msg s (pr-str (el/eval-1 input editor)))
-       (catch Exception e (msg-error s "Eval error" e))))
+  ;; Must not pass the global `editor` atom here: eval-expression runs inside
+  ;; `(swap! editor ...)`, and elisp builtins that `swap! *state*` on the
+  ;; global atom would be clobbered when the outer swap commits `s`. Thread
+  ;; a local atom instead and merge its final value back.
+  (try
+    (let [a (atom s)
+          result (el/eval-1 input a)]
+      (msg @a (pr-str result)))
+    (catch Exception e (msg-error s "Eval error" e))))
 
 ;; --- Bindings ---
 
