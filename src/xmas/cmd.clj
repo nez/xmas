@@ -29,11 +29,19 @@
           (assoc-in (conj wp :hscroll) 0))))
 
 (defn save-cur-point
-  "Write the current buffer's point/mark onto the current window."
+  "Write the current buffer's point/mark onto the current window.
+   No-op if the current buffer doesn't match the window's buffer — e.g.
+   while a minibuffer is active (:buf = \" *mini*\"), writing its point
+   onto the underlying window would corrupt the real buffer's saved
+   coords the next time the window was switched back in."
   [s]
-  (let [wp (cur-window-path s) b (cur s)]
-    (-> s (assoc-in (conj wp :point) (:point b))
-          (assoc-in (conj wp :mark)  (:mark b)))))
+  (let [wp (cur-window-path s)
+        b  (cur s)
+        win-buf (get-in s (conj wp :buffer))]
+    (if (or (nil? b) (not= (:name b) win-buf))
+      s
+      (-> s (assoc-in (conj wp :point) (:point b))
+            (assoc-in (conj wp :mark)  (:mark b))))))
 
 (defn load-window-point
   "If the current window has a saved :point/:mark, copy them onto its buffer."

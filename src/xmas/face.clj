@@ -106,7 +106,8 @@
         (let [[rest end-state] (lisp-normal line specials (inc close))]
           [(vec (cons [0 (inc close) :string] rest)) end-state])
         [[[0 n :string]] :in-string])
-      :normal
+      ;; Default (incl. :normal or any alien state carried over from a
+      ;; different mode's line-states cache): tokenize from scratch.
       (lisp-normal line specials 0))))
 
 (defmethod tokenize :clojure-mode [_ line state]

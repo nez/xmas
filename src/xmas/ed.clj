@@ -168,7 +168,7 @@
         nolink (into-array java.nio.file.LinkOption [])
         done?  (atom false)]
     (try
-      (spit (.toFile tmp) s)
+      (spit (.toFile tmp) s :encoding "UTF-8")
       (when (Files/exists target nolink)
         (try (Files/setPosixFilePermissions tmp (Files/getPosixFilePermissions target nolink))
              (catch UnsupportedOperationException _)))
@@ -265,7 +265,8 @@
   [s]
   (let [due (auto-save-due s)]
     (doseq [[_ file text] due]
-      (try (spit (auto-save-path file) text) (catch Exception _)))
+      (try (spit (auto-save-path file) text :encoding "UTF-8")
+           (catch Exception _)))
     (reset-edit-counts s due)))
 
 (defn- auto-save-tick!
@@ -275,7 +276,8 @@
   (let [due (auto-save-due @editor-atom)]
     (when (seq due)
       (doseq [[_ file text] due]
-        (try (spit (auto-save-path file) text) (catch Exception _)))
+        (try (spit (auto-save-path file) text :encoding "UTF-8")
+           (catch Exception _)))
       (swap! editor-atom reset-edit-counts due))))
 
 (defn save-buffer [s]
@@ -310,7 +312,7 @@
       (contains? (:bufs s) path) (cmd/set-cur-buffer s path)
 
       exists
-      (try (let [raw (slurp path)]
+      (try (let [raw (slurp path :encoding "UTF-8")]
              (open-buf s path (-> (buf/make name (normalize-eol raw) path)
                                   (assoc :line-ending (detect-eol raw)))))
            (catch Exception e (msg-error s (str "Error reading " path) e)))
@@ -1028,7 +1030,7 @@
                     (try (loader p) (log/log "loaded" name)
                          (catch Exception e (swap! editor msg-error name e))))))]
     (load! "init.clj" load-file)
-    (load! "init.el"  #(el/eval-string (slurp %) editor))
+    (load! "init.el"  #(el/eval-string (slurp % :encoding "UTF-8") editor))
     (pkg/load-all! editor)))
 
 (defn package-list

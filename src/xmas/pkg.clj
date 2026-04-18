@@ -36,7 +36,7 @@
   [pkg editor-atom]
   (let [f (pkg-file pkg)]
     (if (.exists f)
-      (do (el/eval-string (slurp f) editor-atom) true)
+      (do (el/eval-string (slurp f :encoding "UTF-8") editor-atom) true)
       false)))
 
 (defn load-all!
