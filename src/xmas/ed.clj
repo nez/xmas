@@ -63,18 +63,13 @@
    s' has :prefix-arg cleared."
   [s d]
   (let [pa (:prefix-arg s)
-        n  (cond (nil? pa)                          d
-                 (and (map? pa) (:num pa))          (:num pa)
-                 (and (map? pa) (:mul pa))          (:mul pa)
-                 :else                              d)]
+        n  (or (:num pa) (:mul pa) d)]
     [n (dissoc s :prefix-arg)]))
 
 (defn universal-argument
   "C-u: start or extend the prefix argument. Each repeat multiplies by 4."
   [s]
-  (let [pa (:prefix-arg s)
-        mul (if (and (map? pa) (:mul pa)) (* 4 (:mul pa)) 4)]
-    (assoc s :prefix-arg {:mul mul})))
+  (assoc s :prefix-arg {:mul (* 4 (or (:mul (:prefix-arg s)) 1))}))
 
 (defn- repeat-cmd
   "Apply `f` to `s` `n` times (non-negative)."
