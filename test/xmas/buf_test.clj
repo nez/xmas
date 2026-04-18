@@ -14,7 +14,10 @@
 
 (defspec edit-sets-modified 200
   (prop/for-all [[buffer from to repl] (spec/gen-edit-args)]
-    (:modified (buf/edit buffer from to repl))))
+    ;; A genuine no-op (same position, empty replacement) intentionally
+    ;; does not mark :modified; skip those cases.
+    (or (and (= from to) (zero? (count repl)))
+        (:modified (buf/edit buffer from to repl)))))
 
 (defspec edit-then-undo-restores-text 200
   (prop/for-all [[buffer from to repl] (spec/gen-edit-args)]
@@ -207,3 +210,13 @@
     (is (= "heYY" (str (:text (buf/edit b 2 100 "YY")))))
     ;; from past end — clamped
     (is (= "helloZ" (str (:text (buf/edit b 100 200 "Z")))))))
+
+(deftest edit-noop-is-inert
+  ;; Regression: (buf/edit b p p "") used to run the full edit pipeline —
+  ;; bumping :version/:edit-count, pushing an empty undo entry, and
+  ;; clearing :redo. A genuine no-op must return the buffer unchanged.
+  (let [b  (buf/make "t" "hello" nil)
+        b1 (buf/edit b  0 0 "x")        ;; now has an undo entry
+        b2 (buf/undo b1)                 ;; now has a redo entry
+        b3 (buf/edit b2 0 0 "")]         ;; a true no-op
+    (is (identical? b2 b3))))

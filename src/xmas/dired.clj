@@ -78,8 +78,11 @@
   (let [b (cmd/cur s)
         t (:text b)
         ln (cmd/line-idx s)
-        start (gap/nth-line-start t ln)]
-    (if (zero? ln)
+        start (gap/nth-line-start t ln)
+        eol   (gap/nth-line-end t ln)]
+    ;; Skip header (line 0) and empty lines — editing `(inc start)` when
+    ;; the line is empty would eat the newline and weld two file rows.
+    (if (or (zero? ln) (>= start eol))
       s
       (cmd/update-cur s #(buf/edit % start (inc start) (str ch))))))
 

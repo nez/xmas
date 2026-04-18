@@ -44,21 +44,25 @@
         tn        (count t)
         from      (-> (long from) (max 0) (min tn))
         to        (-> (long to)   (max from) (min tn))
-        old       (.toString (.subSequence ^CharSequence t (int from) (int to)))
-        repl-len  (count repl)
-        new-text  (gap/edit t from to repl)
-        from-line (gap/line-of new-text from)]
-    (-> b
-        (assoc :text new-text)
-        (assoc :modified true)
-        (update :edit-count (fnil inc 0))
-        (update :version (fnil inc 0))
-        (update :line-states truncate-states from-line)
-        (update :overlays #(ov/adjust (or % []) from to repl-len))
-        (update :undo bounded-conj undo-limit {:from from :old old :new repl})
-        (assoc :redo [])
-        (update :point shift-pos from to repl-len)
-        (update :mark #(when % (shift-pos % from to repl-len))))))
+        repl-len  (count repl)]
+    (if (and (= from to) (zero? repl-len))
+      ;; No-op: don't mark modified, don't pollute undo/redo. A zero-width
+      ;; insert of "" used to clear redo and bump :modified spuriously.
+      b
+      (let [old       (.toString (.subSequence ^CharSequence t (int from) (int to)))
+            new-text  (gap/edit t from to repl)
+            from-line (gap/line-of new-text from)]
+        (-> b
+            (assoc :text new-text)
+            (assoc :modified true)
+            (update :edit-count (fnil inc 0))
+            (update :version (fnil inc 0))
+            (update :line-states truncate-states from-line)
+            (update :overlays #(ov/adjust (or % []) from to repl-len))
+            (update :undo bounded-conj undo-limit {:from from :old old :new repl})
+            (assoc :redo [])
+            (update :point shift-pos from to repl-len)
+            (update :mark #(when % (shift-pos % from to repl-len))))))))
 
 (defn- replay
   "Pop the latest entry from src-key, swap its `gone` text for its `kept` text,

@@ -99,12 +99,18 @@
                 (char-escapes esc) (char-escapes esc)
                 :else             (err (str "Unknown character escape: \\" esc)))))))
 
+(def ^:private num-re #"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+
 (defn- parse-token [^String tok]
   (cond
     (= tok "nil") nil
     :else
-    (or (try (Long/parseLong tok) (catch NumberFormatException _ nil))
-        (try (Double/parseDouble tok) (catch NumberFormatException _ nil))
+    ;; Gate number parsing on a strict regex — Double/parseDouble accepts
+    ;; "NaN", "Infinity", "+Infinity", etc., which would swallow elisp
+    ;; symbols of those names and turn them into floats.
+    (or (when (re-matches num-re tok)
+          (or (try (Long/parseLong tok) (catch NumberFormatException _ nil))
+              (try (Double/parseDouble tok) (catch NumberFormatException _ nil))))
         (symbol tok))))
 
 (defn- read-token
@@ -180,9 +186,13 @@
   (if (eval test) (eval then) (eval-body else)))
 
 (defn- eval-cond [clauses]
+  ;; `(cond (TEST BODY...))` — if BODY is empty and TEST is truthy, return
+  ;; TEST's evaluated value (the elisp idiom `(cond (x) ...)` falls through
+  ;; with `x`'s value). Previously this returned nil unconditionally.
   (reduce (fn [_ [test & body]]
-            (when (or (= test 't) (eval test))
-              (reduced (eval-body body))))
+            (let [tv (if (= test 't) true (eval test))]
+              (when tv
+                (reduced (if (seq body) (eval-body body) tv)))))
           nil clauses))
 
 (defn- eval-setq [args]

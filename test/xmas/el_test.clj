@@ -36,6 +36,13 @@
 (deftest read-float-no-leading-digit
   (is (= 0.5 (r1 "0.5"))))
 
+(deftest read-nan-infinity-as-symbols
+  ;; Regression: Double/parseDouble accepts NaN and Infinity, which used
+  ;; to swallow elisp symbols of those names and turn them into floats.
+  (is (= 'NaN (r1 "NaN")))
+  (is (= 'Infinity (r1 "Infinity")))
+  (is (= '+Infinity (r1 "+Infinity"))))
+
 ;; --- Strings ---
 
 (deftest read-string-basic
@@ -367,6 +374,13 @@
 
 (deftest eval-cond-no-match
   (is (nil? (ev "(cond (nil 1))"))))
+
+(deftest eval-cond-bodyless-clause-returns-test-value
+  ;; Regression: `(cond (X))` should return X's evaluated value when X is
+  ;; truthy, not nil — standard elisp fall-through idiom.
+  (is (= 42 (ev "(cond (42))")))
+  (is (= 7  (ev "(cond (nil 1) (7))")))
+  (is (nil? (ev "(cond (nil))"))))
 
 ;; --- Progn ---
 
