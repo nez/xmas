@@ -80,13 +80,17 @@
   "Wrap a (state)→state command so it honors :prefix-arg by running n times."
   [f] (fn [s] (let [[n s] (consume-arg s 1)] (repeat-cmd f s n))))
 
-(defn forward-char
-  ([s]   (let [[n s] (consume-arg s 1)] (cmd/forward-char s n)))
-  ([s n] (cmd/forward-char s n)))
+(defn- prefix-aware
+  "Wrap an (s, n)→s command so its 0-arity reads n from :prefix-arg.
+   Unlike prefix-repeat, this hands n straight to the underlying command —
+   useful for commands that compute the n-step result directly rather
+   than iterating a 1-step motion."
+  [f]
+  (fn ([s]   (let [[n s] (consume-arg s 1)] (f s n)))
+      ([s n] (f s n))))
 
-(defn backward-char
-  ([s]   (let [[n s] (consume-arg s 1)] (cmd/backward-char s n)))
-  ([s n] (cmd/backward-char s n)))
+(def forward-char  (prefix-aware cmd/forward-char))
+(def backward-char (prefix-aware cmd/backward-char))
 
 (def forward-word         (prefix-repeat cmd/forward-word))
 (def backward-word        (prefix-repeat cmd/backward-word))
