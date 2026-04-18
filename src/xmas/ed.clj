@@ -20,8 +20,10 @@
   (:gen-class))
 
 ;; --- Editor state ---
+;; `defonce` so the dev file-watcher's `require :reload` doesn't replace
+;; the live atom with a fresh nil one, wiping the running editor state.
 
-(def editor (atom nil))
+(defonce editor (atom nil))
 
 (defmacro ^:private export-from [ns & syms]
   `(do ~@(for [s syms] `(def ~s ~(symbol (name ns) (name s))))))

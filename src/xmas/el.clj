@@ -398,19 +398,28 @@
     (when-let [f (get @*fns* sym)]
       (apply-user-fn f call-args))))
 
+(defn- call-target
+  "Invoke `f` with `call-args`. Handles both user-fn maps and Clojure fns,
+   so advice can wrap either."
+  [f call-args]
+  (if (map? f)
+    (apply-user-fn f call-args)
+    (apply f call-args)))
+
 (defn- apply-with-advice
   "Layer :around advice around the target call (reverse-fold so that the
-   first-registered advice is outermost), then run :before and :after."
-  [target elisp-fn call-args]
+   first-registered advice is outermost), then run :before and :after.
+   `f` may be either a user-fn map or a builtin Clojure fn."
+  [target f call-args]
   (binding [*advising* (conj *advising* target)]
     (run-advice :before target call-args)
     (let [around-syms (get-in @*state* [:advice target :around])
-          base (fn [] (apply-user-fn elisp-fn call-args))
+          base (fn [] (call-target f call-args))
           invoker (reduce
                     (fn [inner sym]
                       (fn []
-                        (if-let [f (get @*fns* sym)]
-                          (binding [*original* inner] (apply-user-fn f call-args))
+                        (if-let [af (get @*fns* sym)]
+                          (binding [*original* inner] (apply-user-fn af call-args))
                           (inner))))
                     base
                     (reverse around-syms))
@@ -796,9 +805,9 @@
                       (get builtins head)
                       (err (str "Void function: " head)))]
             (cond
-              (not (map? f))          (apply f evaled-args)
-              (contains? *advising* head) (apply-user-fn f evaled-args)
-              :else                   (apply-with-advice head f evaled-args))))))
+              (contains? *advising* head)            (call-target f evaled-args)
+              (seq (get-in @*state* [:advice head])) (apply-with-advice head f evaled-args)
+              :else                                  (call-target f evaled-args))))))
 
     :else (err (str "Cannot eval: " (pr-str form)))))
 

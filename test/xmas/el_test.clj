@@ -778,6 +778,18 @@
       ed)
     (is (= "T" (str (:text (get (:bufs @ed) "*test*")))))))
 
+(deftest eval-advice-fires-on-builtin
+  ;; Regression: advice on a builtin (`message`, `insert`, etc.) used to
+  ;; be silently ignored — the eval dispatch routed non-map f straight
+  ;; through (apply f ...) bypassing apply-with-advice.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun before-hook (_s) (insert \"B\"))
+              (add-advice 'insert :before 'before-hook)
+              (insert \"X\"))"
+      ed)
+    (is (= "BX" (str (:text (get (:bufs @ed) "*test*")))))))
+
 (deftest eval-advice-calling-target-does-not-recurse
   ;; Regression: advice body that calls the advised target would re-enter
   ;; advice and recurse until stack overflow. Advice must run once per

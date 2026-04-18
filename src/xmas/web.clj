@@ -6,7 +6,7 @@
             [xmas.view :as view]
             [xmas.log :as log]))
 
-(def clients (atom #{}))
+(defonce clients (atom #{}))
 
 (defn render-to-string [s]
   (let [sb (StringBuilder.)]
