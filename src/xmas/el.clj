@@ -604,14 +604,19 @@
 ;; --- Overlays ---
 
 (defn- el-make-overlay [from to]
-  (let [id  (inc (or (:overlay-seq @*state*) 0))
-        buf (:buf @*state*)
-        o   (ov/make from to :default {:id id :buffer buf})]
-    (swap! *state* (fn [s]
-                     (-> s (assoc :overlay-seq id)
-                           (assoc-in [:overlay-home id] buf)
-                           (update-in [:bufs buf :overlays] (fnil conj []) o))))
-    id))
+  ;; Derive id INSIDE the swap fn. Reading :overlay-seq and :buf from a
+  ;; pre-swap snapshot let two concurrent make-overlay calls (nREPL +
+  ;; websocket, say) compute the same id and produce two overlays sharing
+  ;; it — the second one was unreachable via find-overlay and leaked.
+  (:overlay-seq
+    (swap! *state*
+           (fn [s]
+             (let [id  (inc (or (:overlay-seq s) 0))
+                   buf (:buf s)
+                   o   (ov/make from to :default {:id id :buffer buf})]
+               (-> s (assoc :overlay-seq id)
+                     (assoc-in [:overlay-home id] buf)
+                     (update-in [:bufs buf :overlays] (fnil conj []) o)))))))
 
 (defn- find-overlay
   "Return [buffer-name index] for the overlay with `id`, or nil.

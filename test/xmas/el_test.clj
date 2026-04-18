@@ -697,6 +697,21 @@
     (is (pos? id))
     (is (= 1 (count (:overlays (get (:bufs @ed) "*test*")))))))
 
+(deftest make-overlay-concurrent-no-duplicate-ids
+  ;; Regression: the pre-swap snapshot read of :overlay-seq let two
+  ;; concurrent make-overlay calls compute the same id, produce two
+  ;; overlays sharing that id, and leak the one find-overlay couldn't
+  ;; reach. Drive many swaps from many threads and assert unique ids.
+  (let [ed (make-editor "hello")
+        n 50
+        tasks (for [_ (range n)]
+                (future (el/eval-string "(make-overlay 0 1)" ed)))
+        _ (run! deref tasks)
+        ovs (:overlays (get (:bufs @ed) "*test*"))
+        ids (map :id ovs)]
+    (is (= n (count ovs)))
+    (is (= n (count (distinct ids))))))
+
 (deftest eval-overlay-put-sets-face
   (let [ed (make-editor "hello")]
     (el/eval-string "(let ((o (make-overlay 1 3))) (overlay-put o 'face 'region))" ed)
