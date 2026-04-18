@@ -299,10 +299,9 @@
   (-> s (str/replace "\r\n" "\n") (str/replace "\r" "\n")))
 
 (defn- open-buf [s path b]
-  (let [s (-> s (assoc-in [:bufs path] b) (cmd/set-cur-buffer path))]
-    (if-let [m (mode/mode-for-file path)]
-      (mode/set-major-mode s m)
-      s)))
+  (let [s (-> s (assoc-in [:bufs path] b) (cmd/set-cur-buffer path))
+        m (mode/mode-for-file path)]
+    (cond-> s m (mode/set-major-mode m))))
 
 (defn- file-info [filename]
   (let [f (.getAbsoluteFile (java.io.File. filename))]

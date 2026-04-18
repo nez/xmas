@@ -238,6 +238,9 @@
 
 ;; --- Echo area ---
 
+(defn- pad-to-cols! [used cols]
+  (when (< used cols) (t/tw (pad-spaces (- cols used)))))
+
 (defn- render-echo-area
   [{:keys [rows cols] :as state}]
   (let [mini (:mini state) isearch (:isearch state) msg (:msg state)
@@ -251,22 +254,19 @@
             cursor (:point mb)]
         (t/sg (:prompt faces)) (t/tw prompt)
         (t/reset-sg) (t/tw input)
-        (let [used (+ (count prompt) (text/display-width input 0 (count input)))]
-          (when (< used cols) (t/tw (pad-spaces (- cols used)))))
+        (pad-to-cols! (+ (count prompt) (text/display-width input 0 (count input))) cols)
         (t/move mini-row (+ (count prompt) (text/display-width input 0 cursor))))
 
       isearch
       (let [p (str (if (= (:direction isearch) :forward) "I-search: " "I-search backward: ")
                    (:pattern isearch))]
         (t/sg (:prompt faces)) (t/tw p) (t/reset-sg)
-        (let [used (text/display-width p 0 (count p))]
-          (when (< used cols) (t/tw (pad-spaces (- cols used))))))
+        (pad-to-cols! (text/display-width p 0 (count p)) cols))
 
       :else
-      (let [m (or msg "")
-            mw (text/display-width m 0 (count m))]
+      (let [m (or msg "")]
         (t/reset-sg) (t/tw m)
-        (when (< mw cols) (t/tw (pad-spaces (- cols mw))))))))
+        (pad-to-cols! (text/display-width m 0 (count m)) cols)))))
 
 ;; --- Frame signature (dirty-flag input) ---
 

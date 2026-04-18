@@ -71,22 +71,20 @@
         (= ch close) (do (read-ch rdr) (finalize acc))
         :else       (recur (conj acc (read rdr)))))))
 
-(defn- read-quote [^PushbackReader rdr]
+(defn- read-prefix
+  "Read the next form, wrap it as (sym form). `label` is shown if EOF hits."
+  [^PushbackReader rdr sym ^String label]
   (let [form (read rdr)]
-    (when (= form ::eof) (err "Unexpected EOF after quote"))
-    (list 'quote form)))
+    (when (= form ::eof) (err (str "Unexpected EOF after " label)))
+    (list sym form)))
 
-(defn- read-quasi [^PushbackReader rdr]
-  (let [form (read rdr)]
-    (when (= form ::eof) (err "Unexpected EOF after `"))
-    (list 'quasiquote form)))
+(defn- read-quote [rdr] (read-prefix rdr 'quote "quote"))
+(defn- read-quasi [rdr] (read-prefix rdr 'quasiquote "`"))
 
 (defn- read-unquote [^PushbackReader rdr]
   (let [splice? (= \@ (peek-ch rdr))]
     (when splice? (read-ch rdr))
-    (let [form (read rdr)]
-      (when (= form ::eof) (err "Unexpected EOF after ,"))
-      (list (if splice? 'unquote-splicing 'unquote) form))))
+    (read-prefix rdr (if splice? 'unquote-splicing 'unquote) ",")))
 
 (defn- read-char-literal [^PushbackReader rdr]
   (let [ch (read-ch rdr)]
