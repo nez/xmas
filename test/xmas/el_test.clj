@@ -778,6 +778,22 @@
       ed)
     (is (= "T" (str (:text (get (:bufs @ed) "*test*")))))))
 
+(deftest eval-setq-default-aliases-setq
+  ;; setq-default is a common init.el form. No buffer-local vars yet so
+  ;; it behaves like setq.
+  (let [ed (make-editor "")]
+    (el/eval-string "(setq-default foo 42)" ed)
+    (is (= 42 (get @(:el-vars @ed) 'foo)))))
+
+(deftest eval-provide-require-featurep
+  ;; provide/require/featurep are minimal shims so a real init.el using
+  ;; \"(require 'foo)\" doesn't throw Void function.
+  (let [ed (make-editor "")]
+    (is (false? (el/eval-string "(featurep 'my-mod)" ed)))
+    (el/eval-string "(provide 'my-mod)" ed)
+    (is (true? (el/eval-string "(featurep 'my-mod)" ed)))
+    (is (true? (el/eval-string "(require 'my-mod)" ed)))))
+
 (deftest eval-advice-fires-on-builtin
   ;; Regression: advice on a builtin (`message`, `insert`, etc.) used to
   ;; be silently ignored — the eval dispatch routed non-map f straight

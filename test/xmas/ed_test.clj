@@ -954,6 +954,17 @@
     (is (= "abc" (text s')))
     (is (nil? (:mini s')))))
 
+(deftest isearch-accept-clears-stale-failing-msg
+  ;; Regression: `Failing I-search: …` was left in :msg after RET, so
+  ;; the echo area showed the stale warning once :isearch dissoc'd.
+  (let [s  (make-state "hello" 0)
+        s1 (ed/handle-key s [:ctrl \s])
+        s2 (reduce ed/handle-key s1 (seq "zzz"))     ;; no match → :msg set
+        _  (is (.contains ^String (:msg s2) "Failing"))
+        s3 (ed/handle-key s2 :return)]                ;; accept
+    (is (nil? (:isearch s3)))
+    (is (nil? (:msg s3)))))
+
 (deftest mini-accept-falls-back-when-prev-buf-killed
   ;; Regression: if the buffer saved as :prev-buf was killed while the
   ;; minibuffer was open, mini-accept used to restore :buf to that

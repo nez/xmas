@@ -478,7 +478,9 @@
                            :origin (:point (cur s))}))))
 
 (defn- isearch-accept [s]
-  (dissoc s :isearch))
+  ;; Clear :msg too — otherwise a "Failing I-search: foo" from the final
+  ;; keystroke survives into the normal echo area after RET.
+  (-> s (dissoc :isearch) (assoc :msg nil)))
 
 (defn- isearch-cancel [s]
   (let [origin (get-in s [:isearch :origin])]

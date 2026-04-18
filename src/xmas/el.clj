@@ -738,7 +738,12 @@
    'atom             (fn [x] (not (and (seq? x) (seq x))))
    ;; plists
    'put              el-put
-   'get              el-get})
+   'get              el-get
+   ;; module registry — minimal shims so a typical init.el doesn't blow up.
+   ;; Tracks names as a set for introspection; does not load on require.
+   'provide          (fn [feat] (swap! *state* update :provided-features (fnil conj #{}) feat) feat)
+   'require          (fn [feat & _] (contains? (:provided-features @*state*) feat))
+   'featurep         (fn [feat] (contains? (:provided-features @*state*) feat))})
 
 ;; --- Eval ---
 
@@ -781,6 +786,8 @@
         cond    (eval-cond args)
         progn   (eval-body args)
         setq    (eval-setq args)
+        ;; No buffer-local vars yet, so setq-default is equivalent to setq.
+        setq-default (eval-setq args)
         let     (eval-let args)
         let*    (eval-let* args)
         defun   (eval-defun args)
