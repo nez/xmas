@@ -106,7 +106,7 @@
 
 (def ^:private kill-ring-limit 60)
 (defn- kill-push [s text]
-  (update s :kill #(buf/bounded-conj (or % []) kill-ring-limit text)))
+  (update s :kill (fnil buf/bounded-conj []) kill-ring-limit text))
 
 (defn- kill-range
   "Delete [from,to) from the current buffer and push the deleted text onto :kill."

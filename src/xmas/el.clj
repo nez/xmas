@@ -648,8 +648,8 @@
          (fn [s]
            (if-let [[buf idx] (find-overlay s id)]
              (-> s (update-in [:bufs buf :overlays]
-                              (fn [ovs] (vec (concat (subvec ovs 0 idx)
-                                                      (subvec ovs (inc idx))))))
+                              (fn [ovs] (into (subvec ovs 0 idx)
+                                              (subvec ovs (inc idx)))))
                    (update :overlay-home dissoc id))
              s)))
   nil)
