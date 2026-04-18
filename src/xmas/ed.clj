@@ -376,16 +376,16 @@
           [s target] (ensure-fallback-buf s prev-buf)]
       (-> s
           (assoc :buf target :mini nil)
-          (update :mini-history #(if (and (seq input) (not= input (peek %)))
-                                   (conj (or % []) input) (or % [])))
+          (cond-> (and (seq input) (not= input (peek (:mini-history s))))
+            (update :mini-history conj input))
           (on-done input)))
     s))
 
 (defn- mini-set
   "Replace minibuffer contents with entry, point at end."
   [s entry]
-  (-> s (assoc-in [:bufs mini-buf-name :text] (gap/of entry))
-        (assoc-in [:bufs mini-buf-name :point] (count entry))))
+  (update-in s [:bufs mini-buf-name] assoc
+             :text (gap/of entry) :point (count entry)))
 
 (defn- mini-history-move
   "Move minibuffer history selection. dir=+1 goes back (older), -1 forward (newer).
