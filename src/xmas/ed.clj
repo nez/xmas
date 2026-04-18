@@ -904,7 +904,9 @@
              (:pending s)
              (let [prefix-map (:pending s) s (dissoc s :pending)]
                (if-let [cmd (get prefix-map key)]
-                 (cmd s)
+                 ;; The command consumes :prefix-arg just like a direct
+                 ;; dispatch would; strip it here so `C-u 4 C-x C-s` works.
+                 (dissoc (cmd s) :prefix-arg)
                  (msg s (str "prefix " key " undefined"))))
 
              (:query-replace s)
@@ -933,8 +935,13 @@
                             (char? key)    (if (>= (int key) 32) (self-insert s key) s)
                             (string? key)  (self-insert s key)
                             :else          (msg s (str key " undefined")))]
+                   ;; Only drop :prefix-arg when a command actually ran.
+                   ;; When we stashed a prefix keymap into :pending, the
+                   ;; prefix-arg still belongs to the upcoming command.
                    (cond-> s'
-                     (and pa (not= binding universal-argument))
+                     (and pa
+                          (not (map? binding))
+                          (not= binding universal-argument))
                      (dissoc :prefix-arg))))))]
     ;; :exit-pending survives only the command that set it.
     (cond-> s'

@@ -1131,3 +1131,18 @@
               (assoc :el-bindings {[:ctrl \t] (fn [s] (reset! called true) s)}))
         s' (ed/handle-key s [:ctrl \t])]
     (is @called)))
+
+;; --- Prefix arg + prefix key ---
+
+(deftest prefix-arg-survives-prefix-key
+  ;; Regression: `C-u 4 C-x <cmd>` used to drop :prefix-arg when C-x
+  ;; installed a :pending prefix map, so <cmd> saw no argument.
+  (let [seen (atom nil)
+        cmd  (fn [s] (reset! seen (:prefix-arg s)) s)
+        s    (-> (make-state "" 0)
+                 (assoc :el-bindings {[:ctrl \x] {[:ctrl \t] cmd}}))
+        keys [[:ctrl \u] \4 [:ctrl \x] [:ctrl \t]]
+        s'   (reduce ed/handle-key s keys)]
+    (is (= {:num 4} @seen))
+    ;; After the command runs, :prefix-arg must be cleared.
+    (is (nil? (:prefix-arg s')))))

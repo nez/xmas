@@ -353,6 +353,11 @@
     (err (str "Wrong number of arguments: expected " (count args) ", got " (count call-args))))
   (with-scope args call-args #(eval-body body)))
 
+;; Set of targets whose advice is currently active on this thread. A target
+;; re-entered from within its own advice must dispatch without re-applying
+;; advice, otherwise advice that calls the target recurses unboundedly.
+(def ^:dynamic *advising* #{})
+
 (defn- run-advice
   "Invoke each advice function registered under [:advice target kind] with
    the given call-args. Missing or undefined advice is silently skipped."
@@ -365,20 +370,21 @@
   "Layer :around advice around the target call (reverse-fold so that the
    first-registered advice is outermost), then run :before and :after."
   [target elisp-fn call-args]
-  (run-advice :before target call-args)
-  (let [around-syms (get-in @*state* [:advice target :around])
-        base (fn [] (apply-user-fn elisp-fn call-args))
-        invoker (reduce
-                  (fn [inner sym]
-                    (fn []
-                      (if-let [f (get @*fns* sym)]
-                        (binding [*original* inner] (apply-user-fn f call-args))
-                        (inner))))
-                  base
-                  (reverse around-syms))
-        result (invoker)]
-    (run-advice :after target call-args)
-    result))
+  (binding [*advising* (conj *advising* target)]
+    (run-advice :before target call-args)
+    (let [around-syms (get-in @*state* [:advice target :around])
+          base (fn [] (apply-user-fn elisp-fn call-args))
+          invoker (reduce
+                    (fn [inner sym]
+                      (fn []
+                        (if-let [f (get @*fns* sym)]
+                          (binding [*original* inner] (apply-user-fn f call-args))
+                          (inner))))
+                    base
+                    (reverse around-syms))
+          result (invoker)]
+      (run-advice :after target call-args)
+      result)))
 
 ;; --- Buffer bridge ---
 ;; Each builtin below is a thin adapter: it wraps a pure `xmas.cmd` op by
@@ -489,16 +495,31 @@
                    (apply-user-fn f []))
                  @*state*))))
 
+(defn- bind-key
+  "Install `handler` at `keymap-path ++ keys` in `state`. If an intermediate
+   node along the path is already bound to a handler (not a map), replace
+   it with an empty map — binding `C-x C-f` after `C-x` was a plain command
+   used to crash with a ClassCastException out of `assoc-in`."
+  [state keymap-path keys handler]
+  (let [full (into keymap-path keys)]
+    (loop [s state prefix keymap-path remaining keys]
+      (cond
+        (empty? remaining) (assoc-in s full handler)
+        :else (let [cur (get-in s prefix)
+                    s'  (if (or (nil? cur) (map? cur))
+                          s
+                          (assoc-in s prefix {}))]
+                (recur s' (conj prefix (first remaining)) (rest remaining)))))))
+
 (defn- el-global-set-key [key-str func-sym]
   (let [keys (parse-key-string key-str)]
-    (swap! *state* assoc-in (into [:el-bindings] keys) (make-handler func-sym))))
+    (swap! *state* bind-key [:el-bindings] keys (make-handler func-sym))))
 
 ;; --- Mode bridge ---
 
 (defn- el-define-key [mode-name key-str func-sym]
   (let [keys (parse-key-string key-str)]
-    (swap! *state* assoc-in
-      (into [:modes mode-name :keymap] keys) (make-handler func-sym))))
+    (swap! *state* bind-key [:modes mode-name :keymap] keys (make-handler func-sym))))
 
 (defn- el-add-hook [hook-name func-sym]
   (swap! *state* mode/add-hook hook-name (make-handler func-sym))
@@ -744,9 +765,10 @@
                 f (or (get @*fns* head)
                       (get builtins head)
                       (err (str "Void function: " head)))]
-            (if (map? f)
-              (apply-with-advice head f evaled-args)
-              (apply f evaled-args))))))
+            (cond
+              (not (map? f))          (apply f evaled-args)
+              (contains? *advising* head) (apply-user-fn f evaled-args)
+              :else                   (apply-with-advice head f evaled-args))))))
 
     :else (err (str "Cannot eval: " (pr-str form)))))
 

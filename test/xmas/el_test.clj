@@ -749,6 +749,34 @@
       ed)
     (is (= "T" (str (:text (get (:bufs @ed) "*test*")))))))
 
+(deftest eval-advice-calling-target-does-not-recurse
+  ;; Regression: advice body that calls the advised target would re-enter
+  ;; advice and recurse until stack overflow. Advice must run once per
+  ;; outer call; re-entry dispatches the raw function.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun foo () (insert \"F\"))
+              (defun bar () (foo) (insert \"B\"))
+              (add-advice 'foo :around 'bar)
+              (foo))"
+      ed)
+    ;; :around runs once, bar calls foo (raw, no advice), then appends B.
+    (is (= "FB" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-global-set-key-prefix-over-existing-binding
+  ;; Regression: binding `C-x C-f` after `C-x` was already a plain command
+  ;; used to throw ClassCastException out of `assoc-in`.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun a () nil)
+              (defun b () nil)
+              (global-set-key \"\\\\C-x\" 'a)
+              (global-set-key \"\\\\C-x\\\\C-f\" 'b))"
+      ed)
+    (let [binds (:el-bindings @ed)]
+      (is (map? (get binds [:ctrl \x])))
+      (is (fn? (get-in binds [[:ctrl \x] [:ctrl \f]]))))))
+
 ;; --- defcustom / defgroup / defvar ---
 
 (deftest eval-defcustom-sets-value

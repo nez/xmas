@@ -124,10 +124,16 @@
 
 ;; --- Layout: compute screen rect for each leaf path ---
 
-(defn- split-size [total ratio]
-  (let [a (-> (int (* (double total) (double ratio))) (max 1) (min (- total 2)))
-        b (max 0 (- total a 1))]
-    [a b]))
+(defn- split-size
+  "Divide `total` rows/cols between two panes plus a 1-unit divider. Clamps
+   both panes to >= 0 — otherwise total < 3 produced a negative pane and
+   downstream layout walked off the end."
+  [total ratio]
+  (if (< total 3)
+    [(max 0 (quot total 2)) (max 0 (- total 1 (quot total 2)))]
+    (let [a (-> (int (* (double total) (double ratio))) (max 1) (min (- total 2)))
+          b (- total a 1)]
+      [a b])))
 
 (defn- layout-node [node row col rows cols]
   (if (leaf? node)

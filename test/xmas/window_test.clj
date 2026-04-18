@@ -107,6 +107,15 @@
     (is (>= 0.9 (:ratio t')))
     (is (< 0.5 (:ratio t')))))
 
+(deftest layout-small-pane-does-not-go-negative
+  ;; Regression: split-size on total < 3 used to produce a negative pane
+  ;; dimension, which downstream layout walked off the end with.
+  (let [t (first (w/split (w/leaf "a") [] :stacked))]
+    (doseq [rows [0 1 2 3] cols [1 40]]
+      (doseq [[_ rect] (w/layout t rows cols)]
+        (is (<= 0 (:rows rect)))
+        (is (<= 0 (:cols rect)))))))
+
 (deftest layout-uses-ratio
   (let [t (-> (first (w/split (w/leaf "a") [] :side-by-side))
               (assoc :ratio 0.75))
