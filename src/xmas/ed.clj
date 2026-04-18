@@ -711,10 +711,12 @@
             (msg (str "Named macro: " (str/trim name)))))
     (msg s "No macro to name")))
 
+(defn- trim-name [^String s] (str/trim (or s "")))
+
 (defn execute-kbd-macro
   "Replay the macro stored under `name`."
   [s name]
-  (if-let [keys (get-in s [:named-macros (str/trim (or name ""))])]
+  (if-let [keys (get-in s [:named-macros (trim-name name)])]
     (reduce handle-key s keys)
     (msg s (str "No macro: " name))))
 
@@ -763,7 +765,7 @@
           (msg (str (pr-str key) " runs " desc)))))
 
 (defn- describe-function [s name]
-  (let [n  (str/trim (or name ""))
+  (let [n  (trim-name name)
         cmd (get-in s [:commands n])
         sym (symbol n)
         el-fns (:el-fns s)]
@@ -774,7 +776,7 @@
       :else (msg s (str "No function: " n)))))
 
 (defn- describe-variable [s name]
-  (let [n (str/trim (or name ""))
+  (let [n (trim-name name)
         sym (symbol n)
         vars (:el-vars s)
         entry (when vars (find @vars sym))
