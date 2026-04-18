@@ -11,7 +11,7 @@
 (defn render-to-string [s]
   (let [sb (StringBuilder.)]
     (binding [t/*out-fn* (fn [x] (.append sb (str x)))]
-      (view/render s))
+      (view/render (dissoc s :render-sig)))
     (str sb)))
 
 (def ^:private broadcast-keys [:bufs :buf :mini :msg :isearch])

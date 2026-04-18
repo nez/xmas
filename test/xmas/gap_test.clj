@@ -215,3 +215,21 @@
     (is (= "abcdef" (str g)))
     (is (= 1 (gap/line-count g)))
     (is (= 0 (gap/line-of g 3)))))
+
+(deftest incremental-lidx-matches-rescan
+  ;; The incremental splice inside gap/edit must produce the same newline
+  ;; index as building a fresh buffer from the resulting string.
+  (letfn [(nls [g] (vec (for [i (range (count g))
+                              :when (= \newline (.charAt g (int i)))] i)))]
+    (doseq [[init edits] [["abc\ndef\nghi" [[0 0 "X"] [3 4 ""] [0 3 "\n\n"]]]
+                          ["" [[0 0 "a\nb\nc"] [2 3 "XX\nY"] [0 5 ""]]]
+                          ["one\ntwo\nthree\nfour"
+                           [[4 7 "TWO"] [0 3 "ONE"] [8 13 ""] [0 0 "\n\n\n"]]]
+                          ["line\n" [[4 5 ""] [0 0 "\n"] [5 5 "\n\n"]]]]]
+      (loop [g (gap/of init) es edits]
+        (if-let [[f t r] (first es)]
+          (let [g' (gap/edit g f t r)]
+            (is (= (nls g') (nls (gap/of (str g'))))
+                (str "mismatch after " (pr-str [f t r]) " on " (pr-str (str g))))
+            (recur g' (rest es)))
+          :done)))))

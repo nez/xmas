@@ -5,7 +5,8 @@
             [clojure.test.check.properties :as prop]
             [xmas.buf :as buf]
             [xmas.ed :as ed]
-            [xmas.spec :as spec]))
+            [xmas.spec :as spec]
+            [xmas.window :as win]))
 
 ;; --- Test helpers ---
 
@@ -15,6 +16,7 @@
    {:buf "*test*"
     :bufs {"*test*" (assoc (buf/make "*test*" text nil) :point point)}
     :kill [] :msg nil :mini nil
+    :windows (win/leaf "*test*") :cur-window []
     :scroll 0 :rows 24 :cols 80}))
 
 (defn point [s] (:point (ed/cur s)))
@@ -243,6 +245,14 @@
         (is (not= "*test*" (:buf s'))))
       (finally (.delete f)))))
 
+(deftest find-file-auto-detects-clojure-mode
+  (let [f (java.io.File/createTempFile "xmas-test" ".clj")]
+    (try
+      (spit f "(defn foo [])")
+      (let [s' (ed/find-file (make-state "" 0) (.getAbsolutePath f))]
+        (is (= :clojure-mode (:mode (ed/cur s')))))
+      (finally (.delete f)))))
+
 (deftest save-buffer-test
   (let [f (java.io.File/createTempFile "xmas-test" ".txt")]
     (try
@@ -256,6 +266,362 @@
 
 (deftest save-buffer-no-file
   (is (= "No file" (:msg (ed/save-buffer (make-state "abc" 0))))))
+
+;; --- Window commands ---
+
+(deftest split-window-below-creates-split
+  (let [s (ed/split-window-below (make-state "abc"))]
+    (is (= :split (get-in s [:windows :type])))
+    (is (= :stacked (get-in s [:windows :dir])))
+    (is (= [:a] (:cur-window s)))))
+
+(deftest split-window-right-creates-side-by-side
+  (let [s (ed/split-window-right (make-state "abc"))]
+    (is (= :side-by-side (get-in s [:windows :dir])))))
+
+(deftest other-window-cycles-focus
+  (let [s (-> (make-state "abc") ed/split-window-below)
+        s' (ed/other-window s)]
+    (is (= [:b] (:cur-window s')))
+    (is (= [:a] (:cur-window (ed/other-window s'))))))
+
+(deftest delete-window-removes-current
+  (let [s (-> (make-state "abc") ed/split-window-below ed/delete-window)]
+    (is (= :leaf (get-in s [:windows :type])))
+    (is (= [] (:cur-window s)))))
+
+(deftest delete-other-windows-collapses-tree
+  (let [s (-> (make-state "abc")
+              ed/split-window-below
+              ed/split-window-right
+              ed/delete-other-windows)]
+    (is (= :leaf (get-in s [:windows :type])))
+    (is (= [] (:cur-window s)))))
+
+(deftest other-window-updates-buf
+  ;; After split, both panes show same buffer. Switch to a different buffer
+  ;; in A, then check that C-x o restores B's original buffer view.
+  (let [s0 (ed/split-window-below (make-state "a" 0))
+        ;; Now both [:a] and [:b] show "*test*". [:a] is current. Open a new buf in [:a].
+        s1 (-> s0
+               (assoc-in [:bufs "other"] (buf/make "other" "xx" nil))
+               (xmas.cmd/set-cur-buffer "other"))
+        ;; Sanity: [:a] now shows "other", [:b] still "*test*"
+        _ (is (= "other" (get-in s1 [:windows :a :buffer])))
+        _ (is (= "*test*" (get-in s1 [:windows :b :buffer])))
+        s2 (ed/other-window s1)]
+    (is (= [:b] (:cur-window s2)))
+    (is (= "*test*" (:buf s2)))))
+
+(deftest per-window-point-independent-when-same-buffer
+  ;; Split into two panes showing the same buffer; move in A, switch to B,
+  ;; move in B, switch back to A — A's point should be preserved.
+  (let [s0 (ed/split-window-below (make-state "hello world" 0))
+        ;; A moves to position 3
+        s1 (-> s0
+               (assoc-in [:bufs "*test*" :point] 3))
+        ;; switch to B — saves A's point=3, B has no saved, buffer keeps 3
+        s2 (ed/other-window s1)
+        _ (is (= 3 (:point (ed/cur s2))))
+        ;; B moves to 8
+        s3 (assoc-in s2 [:bufs "*test*" :point] 8)
+        ;; switch back to A — saves B's 8, loads A's saved 3
+        s4 (ed/other-window s3)]
+    (is (= [:a] (:cur-window s4)))
+    (is (= 3 (:point (ed/cur s4))))
+    ;; switch back to B — should restore B's 8
+    (let [s5 (ed/other-window s4)]
+      (is (= 8 (:point (ed/cur s5)))))))
+
+;; --- M-x ---
+
+(defn- with-commands [s]
+  (assoc s :commands (#'xmas.ed/builtin-commands)))
+
+(deftest m-x-runs-named-command
+  (let [s (with-commands (make-state "hello" 0))
+        s' (ed/execute-extended-command s "forward-char")]
+    (is (= 1 (:point (ed/cur s'))))))
+
+(deftest m-x-reports-unknown-command
+  (let [s (with-commands (make-state "hello"))
+        s' (ed/execute-extended-command s "no-such-command")]
+    (is (= "No command: no-such-command" (:msg s')))))
+
+(deftest m-x-blank-input-is-noop
+  (let [s (with-commands (make-state "hello" 3))
+        s' (ed/execute-extended-command s "")]
+    (is (= 3 (:point (ed/cur s'))))))
+
+(deftest command-completer-returns-matches
+  (let [s (with-commands (make-state "hello"))
+        {:keys [completed candidates]} (#'xmas.ed/command-completer "for" s)]
+    (is (= "forward-" completed))
+    (is (every? #(.startsWith ^String % "for") candidates))))
+
+(deftest c-u-sets-prefix-arg-to-4
+  (let [s (ed/universal-argument (make-state "abcdefghij" 0))]
+    (is (= {:mul 4} (:prefix-arg s)))))
+
+(deftest c-u-c-u-multiplies-to-16
+  (let [s (-> (make-state "abc") ed/universal-argument ed/universal-argument)]
+    (is (= {:mul 16} (:prefix-arg s)))))
+
+(deftest forward-char-respects-prefix
+  (let [s (assoc (make-state "abcdefghij" 0) :prefix-arg {:mul 4})
+        s' (ed/forward-char s)]
+    (is (= 4 (:point (ed/cur s'))))
+    (is (nil? (:prefix-arg s')))))
+
+(deftest forward-char-no-prefix-moves-one
+  (let [s' (ed/forward-char (make-state "abcdef" 0))]
+    (is (= 1 (:point (ed/cur s'))))))
+
+(deftest delete-char-respects-prefix
+  (let [s (assoc (make-state "abcdef" 0) :prefix-arg {:num 3})
+        s' (ed/delete-char s)]
+    (is (= "def" (text s')))))
+
+(deftest handle-key-accumulates-numeric-prefix
+  ;; C-u, then "1", "2" → prefix-arg = {:num 12}
+  (let [s0 (make-state "abcdefghij" 0)
+        s1 (ed/handle-key s0 [:ctrl \u])
+        s2 (ed/handle-key s1 \1)
+        s3 (ed/handle-key s2 \2)]
+    (is (= {:num 12} (:prefix-arg s3)))))
+
+(deftest handle-key-clears-prefix-after-command
+  ;; C-u 3 C-f → moves 3 chars, prefix cleared
+  (let [s0 (make-state "abcdefghij" 0)
+        s (-> s0
+              (ed/handle-key [:ctrl \u])
+              (ed/handle-key \3)
+              (ed/handle-key [:ctrl \f]))]
+    (is (= 3 (:point (ed/cur s))))
+    (is (nil? (:prefix-arg s)))))
+
+;; --- Keyboard macros ---
+
+(deftest start-kbd-macro-enters-recording
+  (let [s (ed/start-kbd-macro (make-state ""))]
+    (is (vector? (:macro-recording s)))
+    (is (empty? (:macro-recording s)))))
+
+(deftest recording-captures-keys
+  (let [s (-> (make-state "")
+              ed/start-kbd-macro
+              (ed/handle-key \a)
+              (ed/handle-key \b))]
+    (is (= [\a \b] (:macro-recording s)))))
+
+(deftest end-kbd-macro-strips-trigger
+  ;; handle-key for C-x stores :pending; next key )  appends and dispatches.
+  ;; end-kbd-macro fires with last two recorded keys being [C-x, )].
+  (let [s0 (make-state "")
+        s1 (ed/start-kbd-macro s0)
+        s2 (ed/handle-key s1 \a)
+        s3 (ed/handle-key s2 \b)
+        s4 (ed/handle-key s3 [:ctrl \x])
+        s5 (ed/handle-key s4 \))]
+    (is (nil? (:macro-recording s5)))
+    (is (= [\a \b] (:last-macro s5)))))
+
+(deftest call-last-kbd-macro-replays
+  (let [s0 (make-state "")
+        s1 (assoc s0 :last-macro [\a \b \c])
+        s2 (ed/call-last-kbd-macro s1)]
+    (is (= "abc" (text s2)))))
+
+(deftest call-last-kbd-macro-no-macro
+  (let [s (ed/call-last-kbd-macro (make-state ""))]
+    (is (= "No kbd macro defined" (:msg s)))))
+
+(deftest name-last-kbd-macro-stores-under-name
+  (let [s0 (-> (make-state "") (assoc :last-macro [\a \b]))
+        s1 (ed/name-last-kbd-macro s0 "greet")]
+    (is (= [\a \b] (get-in s1 [:named-macros "greet"])))))
+
+(deftest name-last-kbd-macro-no-macro
+  (let [s (ed/name-last-kbd-macro (make-state "") "anything")]
+    (is (= "No macro to name" (:msg s)))))
+
+(deftest execute-kbd-macro-by-name
+  (let [s0 (-> (make-state "")
+               (assoc-in [:named-macros "bang"] [\a \b \c]))
+        s1 (ed/execute-kbd-macro s0 "bang")]
+    (is (= "abc" (text s1)))))
+
+(deftest execute-kbd-macro-missing
+  (let [s (ed/execute-kbd-macro (make-state "") "nope")]
+    (is (.contains ^String (:msg s) "No macro"))))
+
+;; --- Help ---
+
+(deftest describe-key-captures-next-key
+  (let [s0 (with-commands (make-state "hello"))
+        s1 (ed/describe-key s0)]
+    (is (= :describe-key (:capture-next s1)))
+    (let [s2 (ed/handle-key s1 [:ctrl \f])]
+      (is (nil? (:capture-next s2)))
+      (is (.contains ^String (:msg s2) "forward-char")))))
+
+(deftest describe-key-undefined
+  (let [s0 (with-commands (make-state "hello"))
+        s1 (ed/describe-key s0)
+        s2 (ed/handle-key s1 [:ctrl \z])]
+    (is (.contains ^String (:msg s2) "undefined"))))
+
+(deftest describe-function-found
+  (let [s (with-commands (make-state "hello"))
+        s' (#'xmas.ed/describe-function s "yank")]
+    (is (.contains ^String (:msg s') "most recent kill"))))
+
+(deftest describe-function-missing
+  (let [s (with-commands (make-state "hello"))
+        s' (#'xmas.ed/describe-function s "no-such-func")]
+    (is (.contains ^String (:msg s') "No function"))))
+
+(deftest describe-variable-found
+  (let [s0 (make-state "hello")
+        s1 (assoc s0 :el-vars (atom {'answer 42}))
+        s2 (#'xmas.ed/describe-variable s1 "answer")]
+    (is (= "answer = 42" (:msg s2)))))
+
+(deftest describe-variable-missing
+  (let [s0 (make-state "hello")
+        s1 (assoc s0 :el-vars (atom {}))
+        s2 (#'xmas.ed/describe-variable s1 "nope")]
+    (is (.contains ^String (:msg s2) "No variable"))))
+
+;; --- Query replace ---
+
+(deftest query-replace-begin-positions-at-first-match
+  (let [s (#'xmas.ed/query-replace-begin (make-state "hello world hello" 0) "hello" "HI" false)]
+    (is (= "hello" (get-in s [:query-replace :from])))
+    (is (= "HI" (get-in s [:query-replace :to])))
+    (is (= 0 (:count (:query-replace s))))
+    (is (= 0 (:point (ed/cur s))))))
+
+(deftest query-replace-begin-no-match
+  (let [s (#'xmas.ed/query-replace-begin (make-state "hello" 0) "zzz" "!" false)]
+    (is (nil? (:query-replace s)))
+    (is (= "No match" (:msg s)))))
+
+(deftest qr-replace-here-replaces-and-advances
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "foo foo foo" 0) "foo" "XY" false)
+        s1 (#'xmas.ed/qr-replace-here s0)]
+    (is (= "XY foo foo" (text s1)))
+    (is (= 3 (:point (ed/cur s1))))
+    (is (= 1 (get-in s1 [:query-replace :count])))))
+
+(deftest qr-replace-all
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "a.a.a" 0) "a" "B" false)
+        s1 (#'xmas.ed/qr-replace-all s0)]
+    (is (= "B.B.B" (text s1)))
+    (is (nil? (:query-replace s1)))
+    (is (.contains ^String (:msg s1) "3"))))
+
+(deftest qr-exit-clears-state
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "abc abc" 0) "abc" "!" false)
+        s1 (#'xmas.ed/qr-exit s0)]
+    (is (nil? (:query-replace s1)))))
+
+(deftest qr-regexp-uses-groups
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "a1 b2 c3" 0) "([a-z])(\\d)" "\\2\\1" true)
+        s1 (#'xmas.ed/qr-replace-all s0)]
+    (is (= "1a 2b 3c" (text s1)))
+    (is (.contains ^String (:msg s1) "3"))))
+
+(deftest qr-regexp-end-state-match-count
+  (let [s0 (#'xmas.ed/query-replace-begin (make-state "aaa" 0) "a" "b" true)
+        s1 (#'xmas.ed/qr-replace-all s0)]
+    (is (= "bbb" (text s1)))
+    (is (.contains ^String (:msg s1) "3"))))
+
+;; --- Shell command ---
+
+(deftest shell-command-single-line-goes-to-msg
+  (let [s (ed/shell-command (make-state "") "echo hello")]
+    (is (= "hello" (:msg s)))))
+
+(deftest shell-command-multi-line-opens-output-buffer
+  (let [s (ed/shell-command (make-state "") "printf 'a\\nb\\nc'")]
+    (is (= "*Shell Command Output*" (:buf s)))
+    (is (.contains ^String (str (:text (ed/cur s))) "a"))
+    (is (.contains ^String (str (:text (ed/cur s))) "c"))))
+
+(deftest shell-command-blank-is-noop
+  (let [s0 (make-state "hello")
+        s1 (ed/shell-command s0 "")]
+    (is (= "*test*" (:buf s1)))))
+
+(deftest shell-command-on-region-pipes-through
+  (let [s0 (-> (make-state "hello world" 0)
+               (assoc-in [:bufs "*test*" :mark] 0)
+               (assoc-in [:bufs "*test*" :point] 5))
+        s1 (ed/shell-command-on-region s0 "tr a-z A-Z")]
+    (is (= "HELLO world" (text s1)))
+    (is (nil? (:mark (ed/cur s1))))))
+
+(deftest shell-command-on-region-no-mark
+  (let [s0 (make-state "hello" 2)
+        s1 (ed/shell-command-on-region s0 "cat")]
+    (is (= "No region" (:msg s1)))
+    (is (= "hello" (text s1)))))
+
+;; --- Auto-save ---
+
+(deftest auto-save-writes-backup-when-threshold-crossed
+  (let [f (java.io.File/createTempFile "xmas-as-" ".txt")]
+    (try
+      (spit f "original")
+      (let [path (.getAbsolutePath f)
+            s0 (-> (make-state "modified content" 0)
+                   (assoc-in [:bufs "*test*" :file] path)
+                   (assoc-in [:bufs "*test*" :edit-count] 500))
+            s1 (ed/auto-save! s0)]
+        (let [bak (java.io.File. (#'xmas.ed/auto-save-path path))]
+          (is (.exists bak))
+          (is (= "modified content" (slurp bak)))
+          (is (= 0 (get-in s1 [:bufs "*test*" :edit-count])))
+          (.delete bak)))
+      (finally (.delete f)))))
+
+(deftest auto-save-skips-below-threshold
+  (let [s0 (-> (make-state "x" 0)
+               (assoc-in [:bufs "*test*" :file] "/tmp/xmas-nonexistent.txt")
+               (assoc-in [:bufs "*test*" :edit-count] 5))
+        s1 (ed/auto-save! s0)]
+    (is (= 5 (get-in s1 [:bufs "*test*" :edit-count])))))
+
+(deftest save-buffer-deletes-auto-save
+  (let [f (java.io.File/createTempFile "xmas-sas-" ".txt")]
+    (try
+      (let [path (.getAbsolutePath f)
+            bak (java.io.File. (#'xmas.ed/auto-save-path path))
+            _   (spit bak "stale")
+            s   (-> (make-state "hello" 0)
+                    (assoc-in [:bufs "*test*" :file] path))
+            s'  (ed/save-buffer s)]
+        (is (not (.exists bak)))
+        (is (= "hello" (slurp f))))
+      (finally (.delete f)))))
+
+(deftest command-completer-single-match-completes-fully
+  (let [s (with-commands (make-state "hello"))
+        {:keys [completed candidates]} (#'xmas.ed/command-completer "yan" s)]
+    (is (= "yank" completed))
+    (is (empty? candidates))))
+
+(deftest switching-to-different-buffer-clears-window-point
+  ;; When current window's :buffer changes (e.g., C-x b), stale saved point
+  ;; from the previous buffer must not leak into the new buffer.
+  (let [s0 (make-state "hello" 3)
+        s1 (-> s0
+               (assoc-in [:bufs "other"] (assoc (buf/make "other" "xxxx" nil) :point 2))
+               (xmas.cmd/set-cur-buffer "other"))]
+    (is (= 2 (:point (ed/cur s1))))
+    (is (not (contains? (get-in s1 [:windows]) :point)))))
 
 ;; --- handle-key ---
 

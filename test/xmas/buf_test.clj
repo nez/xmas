@@ -161,3 +161,37 @@
                   (buf/make "t" "" nil)
                   (range 1100))]
     (is (<= (count (:undo b)) buf/undo-limit))))
+
+;; --- :line-states truncation on edit/undo/redo ---
+
+(deftest line-states-truncates-at-edit-line
+  ;; Simulate a partially-filled state cache and confirm edit truncates to
+  ;; the line of the edit.
+  (let [b  (assoc (buf/make "t" "a\nb\nc\nd\ne" nil)
+                  :line-states [:s0 :s1 :s2 :s3])
+        b' (buf/edit b 4 4 "X")] ; pos 4 is first char of "c" (line 2)
+    (is (= [:s0 :s1] (:line-states b')))))
+
+(deftest line-states-fully-truncates-on-line0-edit
+  (let [b  (assoc (buf/make "t" "abc\ndef" nil)
+                  :line-states [:s0])
+        b' (buf/edit b 0 0 "X")]
+    (is (= [] (:line-states b')))))
+
+(deftest line-states-truncates-on-undo
+  (let [b  (-> (buf/make "t" "abc\ndef\nghi" nil)
+               (buf/edit 4 4 "X"))
+        b' (assoc b :line-states [:s0 :s1 :s2])
+        u  (buf/undo b')]
+    (is (= [:s0] (:line-states u)))))
+
+(deftest version-bumps-on-edit-and-undo-redo
+  (let [b (buf/make "t" "abc" nil)
+        v0 (:version b)
+        b1 (buf/edit b 3 3 "d")
+        b2 (buf/undo b1)
+        b3 (buf/redo b2)]
+    (is (= 0 v0))
+    (is (> (:version b1) v0))
+    (is (> (:version b2) (:version b1)))
+    (is (> (:version b3) (:version b2)))))

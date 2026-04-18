@@ -603,3 +603,163 @@
           new-state (handler @ed)]
       (is (= "!hello" (str (:text (get (:bufs new-state) "*test*")))))
       (is (= 1 (:point (get (:bufs new-state) "*test*")))))))
+
+;; --- Modes ---
+
+(deftest eval-define-derived-mode
+  (let [ed (make-editor "hi")]
+    (el/eval-string "(define-derived-mode my-mode nil \"MyMode\")" ed)
+    (is (= :major (get-in @ed [:modes 'my-mode :type])))))
+
+(deftest eval-define-minor-mode
+  (let [ed (make-editor "hi")]
+    (el/eval-string "(define-minor-mode my-minor \"docs\")" ed)
+    (is (= :minor (get-in @ed [:modes 'my-minor :type])))))
+
+(deftest eval-define-key-and-dispatch
+  (let [ed (make-editor "hi")]
+    (el/eval-string
+      "(progn (defun bang () (insert \"!\"))
+              (define-derived-mode my-mode nil \"MyMode\")
+              (define-key 'my-mode \"\\\\C-c\\\\C-c\" 'bang)
+              (set-major-mode 'my-mode))"
+      ed)
+    (let [handler (get-in @ed [:modes 'my-mode :keymap [:ctrl \c] [:ctrl \c]])]
+      (is (fn? handler))
+      (is (= "!hi" (str (:text (get (:bufs (handler @ed)) "*test*"))))))))
+
+(deftest eval-add-hook-runs-on-mode-activation
+  (let [ed (make-editor "hi")]
+    (el/eval-string
+      "(progn (defun note () (insert \"note \"))
+              (define-derived-mode my-mode nil \"MyMode\")
+              (add-hook 'my-mode-hook 'note)
+              (set-major-mode 'my-mode))"
+      ed)
+    (is (= "note hi" (str (:text (get (:bufs @ed) "*test*")))))))
+
+;; --- Overlays ---
+
+(deftest eval-make-overlay-returns-id
+  (let [ed (make-editor "hello")
+        id (el/eval-string "(make-overlay 1 3)" ed)]
+    (is (pos? id))
+    (is (= 1 (count (:overlays (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-overlay-put-sets-face
+  (let [ed (make-editor "hello")]
+    (el/eval-string "(let ((o (make-overlay 1 3))) (overlay-put o 'face 'region))" ed)
+    (is (= :region (:face (first (:overlays (get (:bufs @ed) "*test*"))))))))
+
+(deftest eval-delete-overlay-removes-it
+  (let [ed (make-editor "hello")]
+    (el/eval-string "(let ((o (make-overlay 1 3))) (delete-overlay o))" ed)
+    (is (empty? (:overlays (get (:bufs @ed) "*test*"))))))
+
+(deftest overlay-moves-with-edits
+  (let [ed (make-editor "hello")]
+    (el/eval-string "(make-overlay 2 4)" ed)
+    ;; insert "XXX" at position 0 → overlay shifts by 3
+    (el/eval-string "(goto-char 0) (insert \"XXX\")" ed)
+    (let [ov (first (:overlays (get (:bufs @ed) "*test*")))]
+      (is (= 5 (:from ov)))
+      (is (= 7 (:to ov))))))
+
+;; --- Advice ---
+
+(deftest eval-add-advice-before-runs-first
+  (let [ed (make-editor "hi")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun before-advice () (insert \"B\"))
+              (add-advice 'target :before 'before-advice)
+              (target))"
+      ed)
+    ;; buffer initially \"hi\"; point at 0; insert advances point,
+    ;; so first advice inserts 'B' at 0, moves to 1; target inserts 'T' at 1
+    (is (= "BThi" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-add-advice-after-runs-last
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun after-advice () (insert \"A\"))
+              (add-advice 'target :after 'after-advice)
+              (target))"
+      ed)
+    (is (= "TA" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-add-advice-around-can-invoke-original
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun wrap ()
+                (insert \"(\")
+                (call-original)
+                (insert \")\"))
+              (add-advice 'target :around 'wrap)
+              (target))"
+      ed)
+    (is (= "(T)" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-add-advice-around-can-skip-original
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun skip () (insert \"S\"))
+              (add-advice 'target :around 'skip)
+              (target))"
+      ed)
+    (is (= "S" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-add-advice-around-chain
+  ;; Two :around advices. Outer added first → applied outermost.
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun outer () (insert \"[\") (call-original) (insert \"]\"))
+              (defun inner () (insert \"(\") (call-original) (insert \")\"))
+              (add-advice 'target :around 'outer)
+              (add-advice 'target :around 'inner)
+              (target))"
+      ed)
+    (is (= "[(T)]" (str (:text (get (:bufs @ed) "*test*")))))))
+
+(deftest eval-remove-advice-cancels-it
+  (let [ed (make-editor "")]
+    (el/eval-string
+      "(progn (defun target () (insert \"T\"))
+              (defun marker () (insert \"M\"))
+              (add-advice 'target :before 'marker)
+              (remove-advice 'target 'marker)
+              (target))"
+      ed)
+    (is (= "T" (str (:text (get (:bufs @ed) "*test*")))))))
+
+;; --- defcustom / defgroup / defvar ---
+
+(deftest eval-defcustom-sets-value
+  (let [ed (make-editor "")]
+    (el/eval-string "(defcustom my-var 42 \"my doc\")" ed)
+    (is (= 42 (get @(:el-vars @ed) 'my-var)))
+    (is (= "my doc" (get-in @ed [:custom-docs 'my-var])))))
+
+(deftest eval-defgroup-registers-group
+  (let [ed (make-editor "")]
+    (el/eval-string "(defgroup my-group nil \"group doc\")" ed)
+    (is (= "group doc" (get-in @ed [:custom-groups 'my-group])))))
+
+(deftest eval-defvar-preserves-existing-value
+  (let [ed (make-editor "")]
+    (el/eval-string "(defvar x 10)" ed)
+    (el/eval-string "(setq x 99)" ed)
+    (el/eval-string "(defvar x 10)" ed)
+    (is (= 99 (get @(:el-vars @ed) 'x)))))
+
+(deftest eval-toggle-minor-mode
+  (let [ed (make-editor "hi")]
+    (el/eval-string
+      "(progn (define-minor-mode my-minor \"docs\")
+              (toggle-minor-mode 'my-minor))"
+      ed)
+    (is (= #{'my-minor} (:minor-modes (get (:bufs @ed) "*test*"))))))

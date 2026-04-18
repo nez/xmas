@@ -66,6 +66,49 @@
 
 ;; --- Line index ---
 
+(defn- count-newlines ^long [^String s]
+  (let [n (.length s)]
+    (loop [i 0 c 0]
+      (if (>= i n) c
+        (recur (inc i) (if (= (.charAt s i) \newline) (inc c) c))))))
+
+(defn- lidx-bound
+  "First index in lidx whose value is >= v. Uses Arrays/binarySearch."
+  ^long [^ints lidx ^long v]
+  (let [i (java.util.Arrays/binarySearch lidx (int v))]
+    (if (neg? i) (- (- i) 1) i)))
+
+(defn- splice-lidx
+  "New int[] reflecting logical edit of [from,to) → repl in a buffer whose
+   current newline index is `lidx`. Drops entries in [from,to) (half-open —
+   a newline at `from` is inside the replaced range and gone; one at `to`
+   survives and shifts), appends newlines from `repl` at their new positions,
+   shifts the tail by delta = rlen - (to - from)."
+  ^ints [^ints lidx ^long from ^long to ^String repl]
+  (let [n       (alength lidx)
+        lo      (lidx-bound lidx from)
+        hi      (lidx-bound lidx to)
+        rlen    (.length repl)
+        rnl     (count-newlines repl)
+        delta   (- rlen (- to from))
+        out-len (+ lo rnl (- n hi))
+        out     (int-array out-len)]
+    (when (pos? lo)
+      (System/arraycopy lidx 0 out 0 lo))
+    (when (pos? rnl)
+      (loop [i 0 j lo]
+        (when (< i rlen)
+          (if (= (.charAt repl i) \newline)
+            (do (aset out (int j) (int (+ from i)))
+                (recur (inc i) (inc j)))
+            (recur (inc i) j)))))
+    (when (< hi n)
+      (loop [i hi j (+ lo rnl)]
+        (when (< i n)
+          (aset out (int j) (int (+ (aget lidx i) delta)))
+          (recur (inc i) (inc j)))))
+    out))
+
 (defn- scan-newlines
   "Build sorted int[] of logical newline positions from gap buffer arrays."
   ^ints [^chars buf gs ge]
@@ -149,7 +192,7 @@
     (let [rem (- cn to)]
       (when (pos? rem)
         (copy-range! b ogs oge nb (long nge) to cn)))
-    (GapBuffer. nb ngs nge (scan-newlines nb ngs nge))))
+    (GapBuffer. nb ngs nge (splice-lidx (.-lidx gb) from to repl))))
 
 (defn substr
   "Extract logical [from,to) as a String."

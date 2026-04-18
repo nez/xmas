@@ -7,8 +7,55 @@
 (defn buf [s name] (get (:bufs s) name))
 (defn cur [s] (buf s (:buf s)))
 (defn update-cur [s f] (update-in s [:bufs (:buf s)] f))
+
+(defn line-idx
+  "Line number of point in the current buffer."
+  [s]
+  (let [b (cur s)] (gap/line-of (:text b) (:point b))))
+
+(defn cur-window-path
+  "Path into state for the current window leaf."
+  [s] (into [:windows] (:cur-window s)))
+
+(defn set-cur-buffer
+  "Point the current window at `name` and cache it as (:buf s). Clears any
+   saved point/mark so stale coords from the previous buffer can't leak in."
+  [s name]
+  (let [wp (cur-window-path s)]
+    (-> s (assoc :buf name)
+          (update-in wp dissoc :point :mark)
+          (assoc-in (conj wp :buffer) name)
+          (assoc-in (conj wp :scroll) 0)
+          (assoc-in (conj wp :hscroll) 0))))
+
+(defn save-cur-point
+  "Write the current buffer's point/mark onto the current window."
+  [s]
+  (let [wp (cur-window-path s) b (cur s)]
+    (-> s (assoc-in (conj wp :point) (:point b))
+          (assoc-in (conj wp :mark)  (:mark b)))))
+
+(defn load-window-point
+  "If the current window has a saved :point/:mark, copy them onto its buffer."
+  [s]
+  (let [w (get-in s (cur-window-path s))
+        b-name (:buf s)]
+    (cond-> s
+      (contains? w :point) (assoc-in [:bufs b-name :point] (:point w))
+      (contains? w :mark)  (assoc-in [:bufs b-name :mark]  (:mark w)))))
+
+(defn switch-window
+  "Save current point, swap `:cur-window` to `path`, load that window's point,
+   and update `:buf` to match its buffer."
+  [s path]
+  (let [s (-> s save-cur-point (assoc :cur-window path))
+        target-buf (get-in s (conj (cur-window-path s) :buffer))]
+    (-> s (assoc :buf target-buf) load-window-point)))
 (defn set-point [s f] (update-cur s #(buf/set-point % f)))
-(defn edit [s from to repl] (update-cur s #(buf/edit % from to repl)))
+(defn edit [s from to repl]
+  (if (:read-only (cur s))
+    (assoc s :msg "Buffer is read-only")
+    (update-cur s #(buf/edit % from to repl))))
 (defn msg [s m] (assoc s :msg m))
 (defn msg-error [s prefix ^Throwable e] (msg s (str prefix ": " (.getMessage e))))
 

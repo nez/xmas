@@ -1,8 +1,11 @@
 (ns xmas.el
   (:refer-clojure :exclude [eval read])
   (:require [xmas.cmd :as cmd]
+            [xmas.mode :as mode]
+            [xmas.overlay :as ov]
             [xmas.text :as text])
   (:import [java.io PushbackReader StringReader]))
+
 
 ;; ============================================================
 ;; READER
@@ -138,6 +141,7 @@
 (def ^:dynamic *vars* nil)    ;; atom {symbol → value}
 (def ^:dynamic *fns* nil)     ;; atom {symbol → {:args [...] :body [...]}}
 (def ^:dynamic *state* nil)   ;; atom of editor state
+(def ^:dynamic *original* nil);; thunk invoked by (call-original) inside :around advice
 
 (declare eval apply-user-fn)
 
@@ -185,6 +189,44 @@
   (swap! *fns* assoc name {:args (vec arglist) :body body})
   name)
 
+(defn- eval-define-derived-mode
+  "(define-derived-mode name parent docstring body...) — parent and docstring
+   are accepted for compatibility but not used yet."
+  [[name & _]]
+  (swap! *state* mode/register name :major)
+  name)
+
+(defn- eval-define-minor-mode
+  "(define-minor-mode name docstring body...) — docstring ignored for now."
+  [[name & _]]
+  (swap! *state* mode/register name :minor)
+  name)
+
+(defn- eval-defcustom
+  "(defcustom name default docstring &keys...) — sets the variable, stores doc."
+  [[name default docstring & _]]
+  (let [v (eval default)]
+    (swap! *vars* assoc name v)
+    (when (string? docstring)
+      (swap! *state* assoc-in [:custom-docs name] docstring))
+    name))
+
+(defn- eval-defgroup
+  "(defgroup name members docstring ...) — registers a customization group."
+  [[name _members docstring & _]]
+  (swap! *state* assoc-in [:custom-groups name] (or docstring ""))
+  name)
+
+(defn- eval-defvar
+  "(defvar name &optional default docstring) — declare a variable; if already
+   bound, keep existing value."
+  [[name default docstring]]
+  (when-not (contains? @*vars* name)
+    (swap! *vars* assoc name (when default (eval default))))
+  (when (string? docstring)
+    (swap! *state* assoc-in [:custom-docs name] docstring))
+  name)
+
 (defn- eval-while [[test & body]]
   (loop []
     (when (eval test)
@@ -203,6 +245,33 @@
   (when (not= (count args) (count call-args))
     (err (str "Wrong number of arguments: expected " (count args) ", got " (count call-args))))
   (with-scope args call-args #(eval-body body)))
+
+(defn- run-advice
+  "Invoke each advice function registered under [:advice target kind] with
+   the given call-args. Missing or undefined advice is silently skipped."
+  [kind target call-args]
+  (doseq [sym (get-in @*state* [:advice target kind])]
+    (when-let [f (get @*fns* sym)]
+      (apply-user-fn f call-args))))
+
+(defn- apply-with-advice
+  "Layer :around advice around the target call (reverse-fold so that the
+   first-registered advice is outermost), then run :before and :after."
+  [target elisp-fn call-args]
+  (run-advice :before target call-args)
+  (let [around-syms (get-in @*state* [:advice target :around])
+        base (fn [] (apply-user-fn elisp-fn call-args))
+        invoker (reduce
+                  (fn [inner sym]
+                    (fn []
+                      (if-let [f (get @*fns* sym)]
+                        (binding [*original* inner] (apply-user-fn f call-args))
+                        (inner))))
+                  base
+                  (reverse around-syms))
+        result (invoker)]
+    (run-advice :after target call-args)
+    result))
 
 ;; --- Buffer bridge ---
 ;; Each builtin below is a thin adapter: it wraps a pure `xmas.cmd` op by
@@ -244,15 +313,122 @@
 
 ;; --- Keybinding bridge ---
 
+(defn- make-handler
+  "Wrap an elisp function symbol into a (state → state) handler."
+  [func-sym]
+  (let [elisp-fn (or (get @*fns* func-sym)
+                     (err (str "Void function: " func-sym)))]
+    (bound-fn* (fn [s]
+                 (binding [*state* (atom s)]
+                   (apply-user-fn elisp-fn [])
+                   @*state*)))))
+
 (defn- el-global-set-key [key-str func-sym]
-  (let [keys (parse-key-string key-str)
-        elisp-fn (or (get @*fns* func-sym)
-                     (err (str "Void function: " func-sym)))
-        handler (bound-fn* (fn [s]
-                             (binding [*state* (atom s)]
-                               (apply-user-fn elisp-fn [])
-                               @*state*)))]
-    (swap! *state* assoc-in (into [:el-bindings] keys) handler)))
+  (let [keys (parse-key-string key-str)]
+    (swap! *state* assoc-in (into [:el-bindings] keys) (make-handler func-sym))))
+
+;; --- Mode bridge ---
+
+(defn- el-define-key [mode-name key-str func-sym]
+  (let [keys (parse-key-string key-str)]
+    (swap! *state* assoc-in
+      (into [:modes mode-name :keymap] keys) (make-handler func-sym))))
+
+(defn- el-add-hook [hook-name func-sym]
+  (swap! *state* mode/add-hook hook-name (make-handler func-sym))
+  hook-name)
+
+(defn- el-run-hooks [hook-name]
+  (swap! *state* mode/run-hooks hook-name)
+  nil)
+
+(defn- el-set-major-mode [mode-name]
+  (swap! *state* mode/set-major-mode mode-name)
+  mode-name)
+
+(defn- el-toggle-minor-mode [mode-name]
+  (swap! *state* mode/toggle-minor-mode mode-name)
+  mode-name)
+
+;; --- Advice ---
+
+(defn- kwify
+  "Accept both elisp `:before`/`:after` (parsed as colon-prefixed symbols)
+   and Clojure keywords; return a Clojure keyword."
+  [k]
+  (cond
+    (keyword? k) k
+    (symbol? k)  (let [n (name k)]
+                   (keyword (if (.startsWith n ":") (subs n 1) n)))
+    :else        k))
+
+(defn- el-add-advice [target kind advice-sym]
+  (swap! *state* update-in [:advice target (kwify kind)]
+         (fnil conj []) advice-sym)
+  advice-sym)
+
+(defn- el-remove-advice [target advice-sym]
+  (swap! *state* update-in [:advice target]
+    (fn [a]
+      (when a
+        (into {} (map (fn [[k v]] [k (vec (remove #{advice-sym} v))]) a)))))
+  advice-sym)
+
+;; --- Overlays ---
+
+(defn- el-make-overlay [from to]
+  (let [id  (inc (or (:overlay-seq @*state*) 0))
+        buf (:buf @*state*)
+        o   (ov/make from to :default {:id id :buffer buf})]
+    (swap! *state* (fn [s]
+                     (-> s (assoc :overlay-seq id)
+                           (assoc-in [:overlay-home id] buf)
+                           (update-in [:bufs buf :overlays] (fnil conj []) o))))
+    id))
+
+(defn- find-overlay
+  "Return [buffer-name index] for the overlay with `id`, or nil.
+   Looks in the overlay's recorded :buffer first, then falls back to scanning."
+  [state id]
+  (let [scan (fn [ovs]
+               (some (fn [[i ov]] (when (= id (:id ov)) i))
+                     (map-indexed vector ovs)))
+        home (get-in state [:overlay-home id])]
+    (or (when-let [i (scan (get-in state [:bufs home :overlays]))]
+          [home i])
+        (some (fn [[n b]]
+                (when-let [i (scan (:overlays b))] [n i]))
+              (:bufs state)))))
+
+(defn- el-overlay-put [id prop value]
+  (when-let [[buf idx] (find-overlay @*state* id)]
+    (let [k (kwify prop)
+          v (if (= k :face) (kwify value) value)]
+      (swap! *state* assoc-in [:bufs buf :overlays idx k] v)))
+  value)
+
+(defn- el-delete-overlay [id]
+  (when-let [[buf idx] (find-overlay @*state* id)]
+    (swap! *state* (fn [s]
+                     (-> s (update-in [:bufs buf :overlays]
+                                      (fn [ovs] (vec (concat (subvec ovs 0 idx)
+                                                              (subvec ovs (inc idx))))))
+                           (update :overlay-home dissoc id)))))
+  nil)
+
+;; --- Package manager bridge ---
+;; Uses runtime `requiring-resolve` to avoid a compile-time cycle: xmas.pkg
+;; requires xmas.el for eval-string.
+
+(defn- el-package-install [name url]
+  (let [install (requiring-resolve 'xmas.pkg/install)
+        {:keys [status msg]} (install (clojure.core/name name) url)]
+    (swap! *state* assoc :msg msg)
+    (= :ok status)))
+
+(defn- el-package-load [name]
+  (let [load-pkg (requiring-resolve 'xmas.pkg/load-package)]
+    (load-pkg (clojure.core/name name) *state*)))
 
 ;; --- Built-in function table ---
 
@@ -294,7 +470,24 @@
    'search-forward  (search-and-move text/search-forward count)
    'search-backward (search-and-move text/search-backward (constantly 0))
    'message         el-message
-   'global-set-key  el-global-set-key})
+   'global-set-key  el-global-set-key
+   'call-original   (fn [] (when *original* (*original*)))
+   ;; modes
+   'define-key       el-define-key
+   'add-hook         el-add-hook
+   'run-hooks        el-run-hooks
+   'set-major-mode   el-set-major-mode
+   'toggle-minor-mode el-toggle-minor-mode
+   ;; advice
+   'add-advice       el-add-advice
+   'remove-advice    el-remove-advice
+   ;; overlays
+   'make-overlay     el-make-overlay
+   'overlay-put      el-overlay-put
+   'delete-overlay   el-delete-overlay
+   ;; packages
+   'package-install  el-package-install
+   'package-load     el-package-load})
 
 ;; --- Eval ---
 
@@ -313,7 +506,11 @@
 
     ;; symbol lookup (`find` distinguishes "bound to nil" from "unbound")
     (symbol? form)
-    (if (= form 't) true
+    (cond
+      (= form 't) true
+      ;; keyword-like symbols (`:before`, `:after`) are self-evaluating
+      (.startsWith (name form) ":") form
+      :else
       (if-let [entry (find @*vars* form)]
         (val entry)
         (err (str "Void variable: " form))))
@@ -332,6 +529,11 @@
         setq    (eval-setq args)
         let     (eval-let args)
         defun   (eval-defun args)
+        define-derived-mode (eval-define-derived-mode args)
+        define-minor-mode   (eval-define-minor-mode args)
+        defcustom           (eval-defcustom args)
+        defgroup            (eval-defgroup args)
+        defvar              (eval-defvar args)
         lambda  {:args (vec (first args)) :body (rest args)}
         while   (eval-while args)
         and     (eval-and args)
@@ -342,7 +544,7 @@
                     (get builtins head)
                     (err (str "Void function: " head)))]
           (if (map? f)
-            (apply-user-fn f evaled-args)
+            (apply-with-advice head f evaled-args)
             (apply f evaled-args)))))
 
     :else (err (str "Cannot eval: " (pr-str form)))))
@@ -379,3 +581,20 @@
   (let [forms (read-all s)]
     (when (seq forms)
       (with-el-env editor-state #(eval (first forms))))))
+
+(defn call-fn
+  "Apply a user-defined elisp function by symbol, with no args, against the
+   given editor-state atom. Returns the function's return value or nil if
+   the function is undefined."
+  [sym editor-state]
+  (ensure-env! editor-state)
+  (when-let [elisp-fn (get @(:el-fns @editor-state) sym)]
+    (with-el-env editor-state #(apply-user-fn elisp-fn []))))
+
+(defn list-fn-names
+  "Return a sorted seq of user-defined elisp function names (symbols) in the
+   given editor state value."
+  [state]
+  (if-let [fns-atom (:el-fns state)]
+    (sort (keys @fns-atom))
+    []))

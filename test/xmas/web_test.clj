@@ -2,13 +2,15 @@
   (:require [clojure.test :refer [deftest is testing]]
             [xmas.web :as web]
             [xmas.buf :as buf]
-            [xmas.ed :as ed]))
+            [xmas.ed :as ed]
+            [xmas.window :as win]))
 
 (defn make-state [text]
   {:buf "*test*"
    :bufs {"*test*" (assoc (buf/make "*test*" text nil) :point 0)}
    :kill [] :msg nil :mini nil
-   :scroll 0 :rows 24 :cols 80})
+   :windows (win/leaf "*test*") :cur-window []
+   :rows 24 :cols 80})
 
 (deftest render-to-string-produces-output
   (let [s (make-state "hello\nworld")
