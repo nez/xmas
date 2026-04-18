@@ -449,10 +449,9 @@
                (contains? builtins sym))))
 
 (defn- el-fset [sym f]
-  (cond
-    (fn? f)  (swap! *fns* assoc sym {:args [] :body [] :clj f})  ; rare
-    (map? f) (swap! *fns* assoc sym f)
-    :else    (err (str "fset: not a function: " (pr-str f))))
+  (if (map? f)
+    (swap! *fns* assoc sym f)
+    (err (str "fset: not a function: " (pr-str f))))
   sym)
 
 (defn- el-set [sym value]

@@ -332,8 +332,7 @@
                   content (:text (get (:bufs state) (:buffer win)))
                   scroll-line (gap/line-of content (:scroll win))
                   body-rows (dec (:rows rect))
-                  row-in-win (- (:point-line win) scroll-line)
-                  row-in-win (if (>= row-in-win body-rows) (dec body-rows) row-in-win)
+                  row-in-win (min (- (:point-line win) scroll-line) (dec body-rows))
                   col-in-win (cond-> (- (:cursor-col win) (:hscroll win))
                                      (pos? (:hscroll win)) inc)]
               (t/move (+ (:row rect) row-in-win) (+ (:col rect) col-in-win))))
