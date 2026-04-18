@@ -67,18 +67,18 @@
                    (walk (:b node) (conj path :b)))))]
     (walk tree [] [])))
 
+(defn- neighbor-leaf [tree path step]
+  (let [all (leaves tree)
+        i   (.indexOf ^java.util.List all path)]
+    (nth all (mod (step i) (count all)))))
+
 (defn next-leaf
   "Return the path of the next leaf after `path` in pre-order, cycling."
-  [tree path]
-  (let [all (leaves tree)
-        i   (.indexOf ^java.util.List all path)]
-    (nth all (mod (inc i) (count all)))))
+  [tree path] (neighbor-leaf tree path inc))
 
 (defn prev-leaf
-  [tree path]
-  (let [all (leaves tree)
-        i   (.indexOf ^java.util.List all path)]
-    (nth all (mod (dec i) (count all)))))
+  "Return the path of the leaf before `path` in pre-order, cycling."
+  [tree path] (neighbor-leaf tree path dec))
 
 (defn delete-window
   "Remove the leaf at `path` from `tree`, promoting its sibling. Returns

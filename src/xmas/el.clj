@@ -515,10 +515,10 @@
   "Parse an Emacs key string like \"\\C-x\\C-s\" into a vector of internal key representations."
   [^String s]
   (mapv (fn [[_ c m lit plain]]
-          (cond c   [:ctrl (.charAt ^String c 0)]
-                m   [:meta (.charAt ^String m 0)]
-                lit (.charAt ^String lit 0)
-                :else (.charAt ^String plain 0)))
+          (let [ch (.charAt ^String (or c m lit plain) 0)]
+            (cond c   [:ctrl ch]
+                  m   [:meta ch]
+                  :else ch)))
         (re-seq key-token-re s)))
 
 ;; --- Keybinding bridge ---
