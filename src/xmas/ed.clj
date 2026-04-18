@@ -666,21 +666,16 @@
       (qr-advance s)
       (msg (dissoc s :query-replace) "No match"))))
 
-(defn query-replace
-  "M-% entry point: prompt for FROM, then TO, then enter the interactive loop."
-  [s input]
+(defn- qr-prompt-to
+  "Having read FROM, prompt for TO and kick off the interactive loop."
+  [s input regex?]
   (if (str/blank? input)
     s
-    (mini-start s (str "Query replace " input " with: ")
-      (fn [s to] (query-replace-begin s input to false)))))
+    (mini-start s (str "Query replace " (when regex? "regexp ") input " with: ")
+      (fn [s to] (query-replace-begin s input to regex?)))))
 
-(defn query-replace-regexp
-  "M-x entry point for regex-based query replace."
-  [s input]
-  (if (str/blank? input)
-    s
-    (mini-start s (str "Query replace regexp " input " with: ")
-      (fn [s to] (query-replace-begin s input to true)))))
+(defn query-replace        [s input] (qr-prompt-to s input false))
+(defn query-replace-regexp [s input] (qr-prompt-to s input true))
 
 (defn query-replace-cmd [s]
   (mini-start s "Query replace: " query-replace))
@@ -724,17 +719,18 @@
     (replay-macro s keys)
     (msg s "No kbd macro defined")))
 
+(defn- trim-name [^String s] (str/trim (or s "")))
+
 (defn name-last-kbd-macro
   "Store the last recorded macro under `name` for later replay."
   [s name]
-  (if-let [m (:last-macro s)]
-    (if (str/blank? name)
-      (msg s "Empty macro name")
-      (-> s (assoc-in [:named-macros (str/trim name)] m)
-            (msg (str "Named macro: " (str/trim name)))))
-    (msg s "No macro to name")))
-
-(defn- trim-name [^String s] (str/trim (or s "")))
+  (let [m (:last-macro s)
+        n (trim-name name)]
+    (cond
+      (nil? m)       (msg s "No macro to name")
+      (str/blank? n) (msg s "Empty macro name")
+      :else (-> s (assoc-in [:named-macros n] m)
+                  (msg (str "Named macro: " n))))))
 
 (defn execute-kbd-macro
   "Replay the macro stored under `name`."
