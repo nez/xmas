@@ -8,6 +8,7 @@
             [xmas.gap :as gap]
             [xmas.mode :as mode]
             [xmas.pkg :as pkg]
+            [xmas.rect :as rect]
             [xmas.term :as t]
             [xmas.text :as text]
             [xmas.view :as view]
@@ -977,6 +978,87 @@
         (let [a (atom s)] (el/call-fn sym a) @a)
         :else (msg s (str "No command: " n))))))
 
+;; --- Registers ---
+;; Each register is a value under a single character key:
+;;   {:kind :point  :buf b :pos n}        — saved location
+;;   {:kind :text   :text "..."}          — saved region
+;;   {:kind :window :windows w :cur-window p} — saved window config
+;; Lookup uses :capture-next, the same one-key-capture mechanism as C-h k.
+
+(defn- read-char-then [s tag prompt]
+  (-> s (assoc :capture-next tag) (msg prompt)))
+
+(defn point-to-register [s] (read-char-then s :reg-point  "Point to register: "))
+(defn jump-to-register  [s] (read-char-then s :reg-jump   "Jump to register: "))
+(defn copy-to-register  [s] (read-char-then s :reg-copy   "Copy to register: "))
+(defn insert-register   [s] (read-char-then s :reg-insert "Insert register: "))
+(defn window-configuration-to-register [s]
+  (read-char-then s :reg-window "Window configuration to register: "))
+
+(defn- capture-register
+  "Resolve `tag` against `key`, applying the corresponding register op."
+  [s key tag]
+  (let [s  (dissoc s :capture-next)
+        ch (when (char? key) key)]
+    (if-not ch
+      (msg s (str "Not a register: " key))
+      (case tag
+        :reg-point
+        (-> s (assoc-in [:registers ch]
+                        {:kind :point :buf (:buf s) :pos (:point (cur s))})
+              (msg (str "Point saved in register " ch)))
+
+        :reg-jump
+        (let [r (get-in s [:registers ch])]
+          (cond
+            (nil? r) (msg s (str "Register " ch " is empty"))
+            (= :point (:kind r))
+            (let [{:keys [buf pos]} r]
+              (if (contains? (:bufs s) buf)
+                (-> s (cmd/set-cur-buffer buf)
+                      (set-point (fn [_ _] (min pos (count (:text (cmd/buf s buf)))))))
+                (msg s (str "Buffer gone: " buf))))
+            (= :window (:kind r))
+            (assoc s :windows (:windows r) :cur-window (:cur-window r))
+            :else (msg s (str "Register " ch " is text — use C-x r i"))))
+
+        :reg-copy
+        (if-let [m (:mark (cur s))]
+          (let [p (:point (cur s)) t (:text (cur s))
+                lo (min m p) hi (max m p)
+                txt (str (gap/substr t lo hi))]
+            (-> s (assoc-in [:registers ch] {:kind :text :text txt})
+                  (msg (str "Region copied to register " ch))))
+          (msg s "No region"))
+
+        :reg-insert
+        (let [r (get-in s [:registers ch])]
+          (cond
+            (nil? r) (msg s (str "Register " ch " is empty"))
+            (= :text (:kind r)) (cmd/insert-at-point s (:text r))
+            :else (msg s (str "Register " ch " is not text"))))
+
+        :reg-window
+        (-> s (assoc-in [:registers ch]
+                        {:kind :window :windows (:windows s) :cur-window (:cur-window s)})
+              (msg (str "Window configuration saved in register " ch)))))))
+
+(def ^:private register-tags #{:reg-point :reg-jump :reg-copy :reg-insert :reg-window})
+
+;; --- C-x r prefix map (registers + rectangles) ---
+
+(def ^:private cx-r-map
+  {\space point-to-register
+   \j     jump-to-register
+   \s     copy-to-register
+   \i     insert-register
+   \w     window-configuration-to-register
+   \k     rect/kill-rectangle
+   \M     rect/copy-rectangle
+   \y     rect/yank-rectangle
+   \c     rect/clear-rectangle
+   \t     (prompt "String rectangle: " rect/string-rectangle)})
+
 (def bindings
   {[:ctrl \f] forward-char     [:ctrl \b] backward-char
    [:ctrl \n] next-line        [:ctrl \p] previous-line
@@ -1019,6 +1101,7 @@
                \d         (prompt "Dired: " dired/open file-completer)
                \h         mark-whole-buffer
                \k         (prompt "Kill buffer: " kill-buffer)
+               \r         cx-r-map
                \0         delete-window
                \1         delete-other-windows
                \2         split-window-below
@@ -1049,13 +1132,20 @@
              (= :describe-key (:capture-next s))
              (capture-describe-key (dissoc s :capture-next) key)
 
+             (register-tags (:capture-next s))
+             (capture-register s key (:capture-next s))
+
              ;; pending prefix — resolve second key
              (:pending s)
              (let [prefix-map (:pending s) s (dissoc s :pending)]
                (if-let [cmd (get prefix-map key)]
-                 ;; The command consumes :prefix-arg just like a direct
-                 ;; dispatch would; strip it here so `C-u 4 C-x C-s` works.
-                 (dissoc (cmd s) :prefix-arg)
+                 (cond
+                   ;; nested prefix (e.g. C-x r → C-x r SPC)
+                   (map? cmd) (assoc s :pending cmd)
+                   ;; The command consumes :prefix-arg just like a direct
+                   ;; dispatch would; strip it here so `C-u 4 C-x C-s` works.
+                   (fn? cmd)  (dissoc (cmd s) :prefix-arg)
+                   :else      (msg s (str "prefix " key " not a command")))
                  (msg s (str "prefix " key " undefined"))))
 
              (:query-replace s)
@@ -1090,14 +1180,12 @@
                           (not (map? binding))
                           (not= binding universal-argument))
                      (dissoc :prefix-arg))))))]
-    ;; Refresh live-filter candidates after every keystroke that left us
-    ;; in a minibuffer. mini-tab-complete also runs this implicitly via
-    ;; its own assoc, so this is a no-op in that case.
-    (let [s' (cond-> s' (:mini s') mini-refresh-candidates)]
-      ;; :exit-pending survives only the command that set it.
-      (cond-> s'
-        (and (not (:pending s')) prev-exit-pending (:exit-pending s'))
-        (dissoc :exit-pending)))))
+    ;; Refresh live-filter candidates while a minibuffer is active, then
+    ;; expire any :exit-pending the previous command set.
+    (cond-> s'
+      (:mini s') mini-refresh-candidates
+      (and (not (:pending s')) prev-exit-pending (:exit-pending s'))
+      (dissoc :exit-pending))))
 
 ;; --- Main ---
 

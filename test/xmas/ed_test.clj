@@ -5,6 +5,7 @@
             [clojure.test.check.properties :as prop]
             [xmas.buf :as buf]
             [xmas.ed :as ed]
+            [xmas.rect :as rect]
             [xmas.spec :as spec]
             [xmas.window :as win]))
 
@@ -1335,3 +1336,68 @@
         cs3 (count (get-in s3 [:mini :candidates]))]
     ;; back to empty input → candidates restored
     (is (= cs1 cs3))))
+
+;; --- Tier C: registers ---
+
+(defn- run-keys [s & keys]
+  (reduce ed/handle-key s keys))
+
+(deftest point-to-register-saves
+  (let [s  (make-state "hello" 3)
+        s' (run-keys s [:ctrl \x] \r \space \a)]
+    (is (= {:kind :point :buf "*test*" :pos 3}
+           (get-in s' [:registers \a])))))
+
+(deftest jump-to-register-restores-point
+  (let [s  (make-state "hello world" 3)
+        s' (-> s
+               (run-keys [:ctrl \x] \r \space \a)         ;; save point at 3
+               (assoc-in [:bufs "*test*" :point] 9)        ;; move away
+               (run-keys [:ctrl \x] \r \j \a))]            ;; jump back
+    (is (= 3 (point s')))))
+
+(deftest copy-and-insert-register
+  (let [s  (-> (make-state "hello" 5) (with-mark 0))
+        s' (-> s
+               (run-keys [:ctrl \x] \r \s \a)              ;; copy "hello" to 'a
+               (assoc-in [:bufs "*test*" :point] 5)
+               (assoc-in [:bufs "*test*" :mark] nil)
+               (run-keys [:ctrl \x] \r \i \a))]            ;; insert at end
+    (is (= "hellohello" (text s')))))
+
+(deftest insert-empty-register-messages
+  (let [s  (make-state "x" 0)
+        s' (run-keys s [:ctrl \x] \r \i \z)]
+    (is (.contains ^String (or (:msg s') "") "empty"))))
+
+;; --- Tier C: rectangles ---
+
+(deftest kill-rectangle-removes-and-stores
+  ;; "abcd\nefgh\n" — point at start, mark at line 1 col 2 → 2x2 rect
+  (let [s  (-> (make-state "abcd\nefgh\n" 0)
+               (with-mark 7))                        ;; line 1 between f and g
+        s' (rect/kill-rectangle s)]
+    (is (= ["ab" "ef"] (:killed-rect s')))
+    (is (= "cd\ngh\n" (text s')))))
+
+(deftest yank-rectangle-pastes
+  (let [s (-> (make-state "..\n..\n" 0)
+              (assoc :killed-rect ["XX" "YY"]))
+        s' (rect/yank-rectangle s)]
+    (is (= "XX..\nYY..\n" (text s')))))
+
+(deftest clear-rectangle-spaces-out
+  (let [s  (-> (make-state "abcd\nefgh\n" 0) (with-mark 7))
+        s' (rect/clear-rectangle s)]
+    (is (= "  cd\n  gh\n" (text s')))))
+
+(deftest string-rectangle-replaces
+  (let [s  (-> (make-state "abcd\nefgh\n" 0) (with-mark 7))
+        s' (rect/string-rectangle s "ZZ")]
+    (is (= "ZZcd\nZZgh\n" (text s')))))
+
+(deftest copy-rectangle-stashes-without-edit
+  (let [s  (-> (make-state "abcd\nefgh\n" 0) (with-mark 7))
+        s' (rect/copy-rectangle s)]
+    (is (= ["ab" "ef"] (:killed-rect s')))
+    (is (= "abcd\nefgh\n" (text s')))))
