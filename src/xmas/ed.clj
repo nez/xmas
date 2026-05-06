@@ -8,6 +8,7 @@
             [xmas.gap :as gap]
             [xmas.mode :as mode]
             [xmas.pkg :as pkg]
+            [xmas.persist :as persist]
             [xmas.rect :as rect]
             [xmas.term :as t]
             [xmas.text :as text]
@@ -328,22 +329,33 @@
     {:path (.getCanonicalPath f) :name (.getName f)
      :exists (.exists f) :dir? (.isDirectory f)}))
 
+(def ^:private recentf-limit 50)
+
+(defn- bump-recentf [s path]
+  (let [r (vec (take recentf-limit
+                     (cons path (remove #{path} (:recentf s)))))]
+    (persist/save-quiet! "recentf" r)
+    (assoc s :recentf r)))
+
 (defn find-file [s filename]
   (let [{:keys [path name exists dir?]} (file-info filename)]
     (cond
       ;; already open — just switch to it, don't clobber in-memory edits
-      (contains? (:bufs s) path) (cmd/set-cur-buffer s path)
+      (contains? (:bufs s) path) (-> s (cmd/set-cur-buffer path) (bump-recentf path))
 
       ;; Opening a directory drops into dired, matching Emacs's C-x C-f.
       dir? (dired/open s path)
 
       exists
       (try (let [raw (slurp path :encoding "UTF-8")]
-             (open-buf s path (-> (buf/make name (normalize-eol raw) path)
-                                  (assoc :line-ending (detect-eol raw)))))
+             (-> (open-buf s path (-> (buf/make name (normalize-eol raw) path)
+                                      (assoc :line-ending (detect-eol raw))))
+                 (bump-recentf path)))
            (catch Exception e (msg-error s (str "Error reading " path) e)))
 
-      :else (-> (open-buf s path (buf/make name "" path)) (msg "(New file)")))))
+      :else (-> (open-buf s path (buf/make name "" path))
+                (bump-recentf path)
+                (msg "(New file)")))))
 
 (defn switch-buffer [s name]
   (cond
@@ -437,12 +449,13 @@
 (defn mini-accept [s]
   (if-let [{:keys [on-done prev-buf]} (:mini s)]
     (let [input  (str (:text (cur s)))
-          [s target] (ensure-fallback-buf s prev-buf)]
-      (-> s
-          (assoc :buf target :mini nil)
-          (cond-> (and (seq input) (not= input (peek (:mini-history s))))
-            (update :mini-history conj input))
-          (on-done input)))
+          [s target] (ensure-fallback-buf s prev-buf)
+          appended? (and (seq input) (not= input (peek (:mini-history s))))
+          s' (-> s
+                 (assoc :buf target :mini nil)
+                 (cond-> appended? (update :mini-history conj input)))]
+      (when appended? (persist/save-quiet! "mini-history" (:mini-history s')))
+      (on-done s' input))
     s))
 
 (defn- mini-set
@@ -1045,7 +1058,48 @@
 
 (def ^:private register-tags #{:reg-point :reg-jump :reg-copy :reg-insert :reg-window})
 
-;; --- C-x r prefix map (registers + rectangles) ---
+;; --- Bookmarks (named, persisted positions) ---
+
+(defn- bookmark-completer [input s]
+  (complete-prefix input (sort (map str (keys (:bookmarks s))))))
+
+(defn- bookmark-set-1 [s name]
+  (let [n (str/trim name)]
+    (if (str/blank? n)
+      s
+      (let [bookmarks (assoc (:bookmarks s) n
+                             {:buf (:buf s) :pos (:point (cur s))})]
+        (persist/save-quiet! "bookmarks" bookmarks)
+        (-> s (assoc :bookmarks bookmarks)
+              (msg (str "Bookmark " n " saved")))))))
+
+(defn- bookmark-jump-1 [s name]
+  (let [n (str/trim name)
+        bm (get (:bookmarks s) n)]
+    (cond
+      (str/blank? n)                         s
+      (nil? bm)                              (msg s (str "No bookmark: " n))
+      (not (contains? (:bufs s) (:buf bm)))  (msg s (str "Buffer gone: " (:buf bm)))
+      :else (let [{:keys [buf pos]} bm
+                  s' (cmd/set-cur-buffer s buf)
+                  cap (count (:text (cmd/buf s' buf)))]
+              (set-point s' (fn [_ _] (min pos cap)))))))
+
+(defn bookmark-set  [s] (mini-start s "Bookmark name: " bookmark-set-1))
+(defn bookmark-jump [s] (mini-start s "Jump to bookmark: " bookmark-jump-1 bookmark-completer))
+
+;; --- Recentf ---
+
+(defn- recentf-completer [input s]
+  (complete-prefix input (:recentf s)))
+
+(defn- recentf-open-1 [s path]
+  (find-file s path))
+
+(defn recentf-open [s]
+  (mini-start s "Recent file: " recentf-open-1 recentf-completer))
+
+;; --- C-x r prefix map (registers + rectangles + bookmarks) ---
 
 (def ^:private cx-r-map
   {\space point-to-register
@@ -1053,6 +1107,8 @@
    \s     copy-to-register
    \i     insert-register
    \w     window-configuration-to-register
+   \m     bookmark-set
+   \b     bookmark-jump
    \k     rect/kill-rectangle
    \M     rect/copy-rectangle
    \y     rect/yank-rectangle
@@ -1242,12 +1298,22 @@
       register-builtin-modes
       register-builtin-commands))
 
+(defn- load-persisted-state!
+  "Restore bookmarks, recentf, and mini-history from ~/.xmas/. Missing or
+   corrupt files are silently ignored."
+  []
+  (swap! editor assoc
+         :bookmarks    (or (persist/load! "bookmarks") {})
+         :recentf      (or (persist/load! "recentf") [])
+         :mini-history (or (persist/load! "mini-history") [])))
+
 (defn- load-init-files! []
   (let [load! (fn [name loader]
                 (let [p (str (System/getProperty "user.home") "/.xmas/" name)]
                   (when (.exists (java.io.File. p))
                     (try (loader p) (log/log "loaded" name)
                          (catch Exception e (swap! editor msg-error name e))))))]
+    (load-persisted-state!)
     (load! "init.clj" load-file)
     (load! "init.el"  #(el/eval-string (slurp % :encoding "UTF-8") editor))
     (pkg/load-all! editor)))

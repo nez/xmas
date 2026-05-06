@@ -5,6 +5,7 @@
             [clojure.test.check.properties :as prop]
             [xmas.buf :as buf]
             [xmas.ed :as ed]
+            [xmas.persist :as persist]
             [xmas.rect :as rect]
             [xmas.spec :as spec]
             [xmas.window :as win]))
@@ -1401,3 +1402,74 @@
         s' (rect/copy-rectangle s)]
     (is (= ["ab" "ef"] (:killed-rect s')))
     (is (= "abcd\nefgh\n" (text s')))))
+
+;; --- Tier D: persistence ---
+
+(defn- with-no-disk [f]
+  (with-redefs [persist/save!       (fn [& _] nil)
+                persist/save-quiet! (fn [& _] nil)]
+    (f)))
+
+(deftest bookmark-set-stores-in-memory
+  (with-no-disk
+    #(let [s  (make-state "hello world" 6)
+           s' (run-keys s [:ctrl \x] \r \m)              ;; opens prompt
+           s' (run-keys s' \h \i :return)]               ;; type "hi", accept
+       (is (= {:buf "*test*" :pos 6}
+              (get-in s' [:bookmarks "hi"]))))))
+
+(deftest bookmark-jump-restores-point
+  (with-no-disk
+    #(let [s  (-> (make-state "hello world" 6)
+                  (assoc :bookmarks {"start" {:buf "*test*" :pos 0}}))
+           s' (run-keys s [:ctrl \x] \r \b \s \t \a \r \t :return)]
+       (is (= 0 (point s'))))))
+
+(deftest bookmark-jump-missing-bookmark-messages
+  (with-no-disk
+    #(let [s  (make-state "x" 0)
+           s' (run-keys s [:ctrl \x] \r \b \z :return)]
+       (is (.contains ^String (or (:msg s') "") "No bookmark")))))
+
+(deftest find-file-bumps-recentf
+  (with-no-disk
+    #(let [tmp (doto (java.io.File/createTempFile "xmas-test" ".txt")
+                 (.deleteOnExit))
+           _ (spit tmp "hi")
+           p (.getCanonicalPath tmp)
+           s  (make-state "" 0)
+           s' (ed/find-file s p)]
+       (is (= [p] (:recentf s')))
+       ;; reopening pushes existing entry to front, doesn't duplicate
+       (let [s2 (ed/find-file s' p)]
+         (is (= [p] (:recentf s2)))))))
+
+(deftest recentf-respects-limit
+  (with-no-disk
+    #(let [s  (-> (make-state "" 0)
+                  (assoc :recentf (vec (map (fn [n] (str "/f" n)) (range 60)))))
+           s' (#'ed/bump-recentf s "/new")]
+       (is (= 50 (count (:recentf s'))))
+       (is (= "/new" (first (:recentf s')))))))
+
+;; --- xmas.persist roundtrip ---
+
+(deftest persist-roundtrip
+  (let [tmp-home (.getCanonicalPath
+                   (java.io.File/createTempFile "xmas-home" ""))
+        ;; createTempFile makes a *file*; we want a fresh dir.
+        _ (.delete (java.io.File. tmp-home))
+        _ (.mkdirs (java.io.File. tmp-home))
+        original (System/getProperty "user.home")]
+    (try
+      (System/setProperty "user.home" tmp-home)
+      (persist/save! "persist-test" {:a 1 :b [2 3]})
+      (is (= {:a 1 :b [2 3]} (persist/load! "persist-test")))
+      (finally
+        (System/setProperty "user.home" original)
+        (doseq [f (reverse (file-seq (java.io.File. tmp-home)))]
+          (.delete f))))))
+
+(deftest persist-load-default-on-missing
+  (is (= :default-val
+         (persist/load! "definitely-not-a-real-file-name-xxx" :default-val))))
