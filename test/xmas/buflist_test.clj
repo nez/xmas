@@ -21,7 +21,7 @@
   (let [s0 (state-with-bufs {"a" (buf/make "a" "" nil)
                              " *mini*" (buf/make " *mini*" "" nil)} "a")
         s (buflist/open s0)
-        entries (:buflist-entries (cmd/cur s))]
+        entries (:listbuf-entries (cmd/cur s))]
     (is (= ["a"] (map :name entries)))))
 
 (deftest switch-moves-to-buffer-at-point

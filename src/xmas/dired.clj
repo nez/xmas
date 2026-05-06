@@ -1,11 +1,10 @@
 (ns xmas.dired
-  "Directory listing buffers. Buffer text is header + one line per file,
-   with a 2-char mark column. Operations use buf/edit directly to bypass
-   the cmd/edit read-only guard."
-  (:require [clojure.string :as str]
-            [xmas.buf :as buf]
+  "Directory listing buffers built on listbuf. Marks live here because they
+   mutate buffer text directly; navigation/refresh delegate to listbuf."
+  (:require [xmas.buf :as buf]
             [xmas.cmd :as cmd]
-            [xmas.gap :as gap])
+            [xmas.gap :as gap]
+            [xmas.listbuf :as listbuf])
   (:import [java.io File]))
 
 (defn- file-entries [^String dir]
@@ -15,7 +14,7 @@
             children (sort-by #(.getName ^File %) (or (.listFiles d) []))]
         (vec (cond->> children parent (cons parent)))))))
 
-(defn- format-line [^File f self-path parent-path]
+(defn- format-entry [^File f self-path parent-path]
   (let [path (.getCanonicalPath f)
         name (cond
                (= path self-path)   "."
@@ -24,28 +23,24 @@
         suffix (if (.isDirectory f) "/" "")]
     (str "  " name suffix)))
 
-(defn- render [^String dir files]
-  (let [d (File. dir)
-        self-path (.getCanonicalPath d)
-        parent (.getParentFile d)
-        parent-path (when parent (.getCanonicalPath parent))]
-    (str/join "\n"
-      (cons (str "  " dir ":")
-            (map #(format-line % self-path parent-path) files)))))
-
 (defn buf-name-for [^String dir] (str "*dired " dir "*"))
 
+(defn- spec [^String dir]
+  (let [d (File. dir)
+        self (.getCanonicalPath d)
+        parent (.getParentFile d)
+        parent-path (when parent (.getCanonicalPath parent))]
+    {:name         (buf-name-for dir)
+     :mode         :dired-mode
+     :header       (str "  " dir ":")
+     :entries      (file-entries dir)
+     :format-entry #(format-entry % self parent-path)
+     :extras       {:dired-dir dir}}))
+
 (defn make-buffer
-  "Build a fresh dired buffer for `dir`. Buffer is read-only and carries the
-   file list as :dired-files (vector) for O(1) line→file lookup."
+  "Build a fresh dired buffer for `dir`."
   [^String dir]
-  (let [files (file-entries dir)
-        text  (render dir files)]
-    (-> (buf/make (buf-name-for dir) text nil)
-        (assoc :mode :dired-mode
-               :read-only true
-               :dired-dir dir
-               :dired-files files))))
+  (listbuf/make (spec dir)))
 
 (defn open
   "Open `dir` in a dired buffer, reusing any existing buffer of the same name."
@@ -56,14 +51,7 @@
         (assoc-in [:bufs name] (make-buffer canonical))
         (cmd/set-cur-buffer name))))
 
-;; --- Line / file helpers ---
-
-(defn- file-on-line
-  "Return the File at the current line (accounting for 1-line header), or nil."
-  [s]
-  (let [b (cmd/cur s)
-        idx (dec (cmd/line-idx s))]
-    (when (>= idx 0) (get (:dired-files b) idx))))
+;; --- Navigation / marks ---
 
 (defn- goto-next-line [s]
   (let [b (cmd/cur s)
@@ -86,20 +74,15 @@
       s
       (cmd/update-cur s #(buf/edit % start (inc start) (str ch))))))
 
-;; --- Commands ---
-
-(defn mark-delete [s]
-  (-> s (set-mark-char \D) goto-next-line))
-
-(defn unmark [s]
-  (-> s (set-mark-char \space) goto-next-line))
+(defn mark-delete [s] (-> s (set-mark-char \D) goto-next-line))
+(defn unmark      [s] (-> s (set-mark-char \space) goto-next-line))
 
 (defn- marked-files
   "Scan the buffer for lines beginning with 'D ' and return their Files."
   [s]
   (let [b (cmd/cur s)
         t (:text b)
-        files (:dired-files b)]
+        files (:listbuf-entries b)]
     (keep-indexed
       (fn [idx f]
         (let [start (gap/nth-line-start t (inc idx))]
@@ -111,15 +94,8 @@
 (defn revert
   "Re-read the directory, preserving point."
   [s]
-  (let [b (cmd/cur s)
-        dir (:dired-dir b)
-        point (:point b)
-        fresh (make-buffer dir)
-        ver   (inc (or (:version b) 0))]
-    (-> s
-        (assoc-in [:bufs (:buf s)]
-                  (assoc fresh :point (min point (count (:text fresh)))
-                               :version ver)))))
+  (let [b (cmd/cur s)]
+    (listbuf/refresh s (:name b) (spec (:dired-dir b)))))
 
 (defn do-delete
   "Delete all D-marked files and refresh."
@@ -146,5 +122,5 @@
 (defn find-file-at-point
   "Return [:dir path] or [:file path] for the entry at point, or nil for header."
   [s]
-  (when-let [^File f (file-on-line s)]
+  (when-let [^File f (listbuf/entry-at-point s)]
     [(if (.isDirectory f) :dir :file) (.getCanonicalPath f)]))

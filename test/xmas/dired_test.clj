@@ -82,7 +82,7 @@
         ;; Find the line index for "doomed.txt" — entries sorted alphabetically,
         ;; with parent prepended, so: [parent, doomed.txt, keeper.txt]
         (let [s0 (dired/open {:buf nil :bufs {}} (.getCanonicalPath d))
-              files (:dired-files (cmd/cur s0))
+              files (:listbuf-entries (cmd/cur s0))
               doomed-idx (first (keep-indexed
                                   #(when (= "doomed.txt" (.getName ^File %2)) %1)
                                   files))

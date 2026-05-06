@@ -1,5 +1,13 @@
 # xmas — Road to Minimal Emacs
 
+## Goal
+
+Reach Emacs parity by the simplest implementation possible. Every feature must
+collapse onto a small set of primitives — buffers, pure `state -> state`
+commands, gap text, a single editor atom. Resist parallel implementations of
+the same idea: when two features look like the same problem, share the
+primitive instead of duplicating it. Cut implementation, never scope.
+
 ## Current State (v0.2)
 
 Text editor with Emacs keybindings, gap buffer with line index, elisp reader + evaluator,
