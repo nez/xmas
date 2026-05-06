@@ -1239,3 +1239,72 @@
         p1 (:prev-buf (:mini s1))
         s2 (ed/handle-key s1 [:meta \:])]         ;; would open another mini
     (is (= p1 (:prev-buf (:mini s2))))))
+
+;; --- Tier B: daily commands ---
+
+(defn- with-mark [s m]
+  (update-in s [:bufs (:buf s)] assoc :mark m))
+
+(deftest transpose-chars-swaps
+  (is (= "abdc" (text (ed/transpose-chars (make-state "abcd" 3))))))
+
+(deftest transpose-chars-noop-at-start
+  (is (= "ab" (text (ed/transpose-chars (make-state "ab" 0))))))
+
+(deftest transpose-lines-swaps
+  ;; point on second line; transposing pulls it up
+  (let [s (make-state "first\nsecond\nthird\n" 6)]
+    (is (= "second\nfirst\nthird\n" (text (ed/transpose-lines s))))))
+
+(deftest upcase-region-with-mark
+  (let [s (-> (make-state "hello world" 5) (with-mark 0))]
+    (is (= "HELLO world" (text (ed/upcase-region s))))))
+
+(deftest downcase-region-with-mark
+  (let [s (-> (make-state "HELLO WORLD" 11) (with-mark 6))]
+    (is (= "HELLO world" (text (ed/downcase-region s))))))
+
+(deftest capitalize-region-with-mark
+  (let [s (-> (make-state "hello world" 11) (with-mark 0))]
+    (is (= "Hello World" (text (ed/capitalize-region s))))))
+
+(deftest mark-whole-buffer-sets-region
+  (let [s (ed/mark-whole-buffer (make-state "hello" 2))]
+    (is (= 0 (point s)))
+    (is (= 5 (:mark (ed/cur s))))))
+
+(deftest exchange-point-and-mark-swaps
+  (let [s (-> (make-state "hello" 4) (with-mark 1))
+        s' (ed/exchange-point-and-mark s)]
+    (is (= 1 (point s')))
+    (is (= 4 (:mark (ed/cur s'))))))
+
+(deftest comment-region-prepends
+  ;; mark at 0, point at 5 covers lines 0,1,2 — point sits inside "c"
+  (let [s (-> (make-state "a\nb\nc\n" 5) (with-mark 0))
+        s' (ed/comment-region s)]
+    (is (= ";; a\n;; b\n;; c\n" (text s')))))
+
+(deftest kill-buffer-removes-and-falls-back
+  (let [s (-> (make-state "first" 0)
+              (assoc-in [:bufs "extra"] (buf/make "extra" "x" nil)))
+        s' (ed/kill-buffer s "*test*")]
+    (is (not (contains? (:bufs s') "*test*")))
+    (is (= "extra" (:buf s')))))
+
+(deftest kill-buffer-refuses-last
+  (let [s  (make-state "only" 0)
+        s' (ed/kill-buffer s "*test*")]
+    (is (contains? (:bufs s') "*test*"))
+    (is (= "Cannot kill last buffer" (:msg s')))))
+
+(deftest recenter-sets-scroll
+  ;; 24 rows -> body 22 rows -> middle ~11. Point on line 20 should
+  ;; produce scroll at line 9 (start position).
+  (let [text (apply str (repeat 30 "x\n"))
+        s (-> (make-state text 0)
+              (assoc-in [:bufs "*test*" :point] 40))   ;; line 20
+        s' (ed/recenter s)
+        scroll (get-in s' [:windows :scroll])]
+    (is (some? scroll))
+    (is (>= scroll 18))))            ;; scroll on line 9 = pos 18 (each line is 2 chars "x\n")

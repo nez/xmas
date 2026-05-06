@@ -32,7 +32,10 @@
   cur update-cur set-point edit msg msg-error
   beginning-of-line end-of-line
   beginning-of-buffer end-of-buffer
-  insert-newline)
+  insert-newline
+  upcase-region downcase-region capitalize-region
+  mark-whole-buffer exchange-point-and-mark
+  transpose-chars transpose-lines)
 
 (defn- line-move [dir]
   (fn [s]
@@ -350,6 +353,56 @@
     (.startsWith ^String name " ") (msg s (str "Reserved buffer name: " name))
     (cmd/buf s name) (cmd/set-cur-buffer s name)
     :else (-> s (assoc-in [:bufs name] (buf/make name)) (cmd/set-cur-buffer name))))
+
+(defn kill-buffer
+  "Remove `name` (defaults to current). Refuses to kill the last buffer.
+   Windows showing the killed buffer fall back to the next visible buffer
+   (or *scratch* if none remain)."
+  [s name]
+  (let [target (if (str/blank? name) (:buf s) (str/trim name))]
+    (cond
+      (not (contains? (:bufs s) target)) (msg s (str "No buffer: " target))
+      (= 1 (count (:bufs s)))             (msg s "Cannot kill last buffer")
+      :else
+      (let [fallback (or (first (remove #(or (= % target)
+                                             (.startsWith ^String % " "))
+                                        (sort (keys (:bufs s)))))
+                         "*scratch*")
+            s' (-> s (update :bufs dissoc target)
+                     (update :windows win/replace-buffer target fallback))
+            s' (cond-> s'
+                 (= target (:buf s')) (cmd/set-cur-buffer fallback))]
+        (msg s' (str "Killed " target))))))
+
+(defn recenter
+  "Move the current window's scroll so point lands on the middle row."
+  [s]
+  (let [b (cur s) t (:text b) p (:point b)
+        rows (max 1 (- (:rows s 24) 2))
+        point-line  (gap/line-of t p)
+        target-line (max 0 (- point-line (quot rows 2)))
+        new-scroll  (gap/nth-line-start t target-line)]
+    (assoc-in s (conj (cmd/cur-window-path s) :scroll) new-scroll)))
+
+(defn comment-region
+  "Prepend the buffer's :comment-start (default ';; ') to each line in the
+   region. No-op without a mark."
+  [s]
+  (let [b (cur s) p (:point b) m (:mark b)]
+    (if-not m
+      (msg s "No region")
+      (let [lo (min (long p) (long m))
+            hi (max (long p) (long m))
+            t  (:text b)
+            first-line (gap/line-of t lo)
+            last-line  (max first-line (gap/line-of t (max lo (dec hi))))
+            cs       (or (:comment-start b) ";; ")
+            fl-start (gap/nth-line-start t first-line)
+            ll-end   (gap/nth-line-end   t last-line)
+            slice    (str (gap/substr t fl-start ll-end))
+            commented (str/join "\n" (map #(str cs %) (str/split slice #"\n" -1)))]
+        (-> (edit s fl-start ll-end commented)
+            (update-cur #(assoc % :mark nil)))))))
 
 ;; --- Minibuffer ---
 
@@ -937,6 +990,9 @@
    [:ctrl \r] #(isearch-start % :backward)
    [:ctrl \/] undo [:meta \/] redo [:ctrl \g] keyboard-quit
    [:ctrl \u] universal-argument
+   [:ctrl \t] transpose-chars
+   [:ctrl \l] recenter
+   [:meta \;] comment-region
    [:ctrl \h] {\k describe-key
                \f (prompt "Describe function: " describe-function command-completer)
                \v (prompt "Describe variable: " describe-variable)}
@@ -944,8 +1000,14 @@
                [:ctrl \f] (prompt "Find file: " find-file file-completer)
                [:ctrl \b] buflist/open
                [:ctrl \c] confirm-quit
+               [:ctrl \x] exchange-point-and-mark
+               [:ctrl \u] upcase-region
+               [:ctrl \l] downcase-region
+               [:ctrl \t] transpose-lines
                \b         (prompt "Buffer: " switch-buffer)
                \d         (prompt "Dired: " dired/open file-completer)
+               \h         mark-whole-buffer
+               \k         (prompt "Kill buffer: " kill-buffer)
                \0         delete-window
                \1         delete-other-windows
                \2         split-window-below

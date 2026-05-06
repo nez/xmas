@@ -1,6 +1,7 @@
 (ns xmas.cmd
   "Pure state-transition commands shared by ed (terminal) and el (elisp bridge)."
-  (:require [xmas.buf :as buf]
+  (:require [clojure.string :as str]
+            [xmas.buf :as buf]
             [xmas.gap :as gap]
             [xmas.text :as text]))
 
@@ -107,3 +108,72 @@
   (let [lo (min (long from) (long to))
         hi (max (long from) (long to))]
     (edit s lo hi "")))
+
+(defn- region-bounds
+  "Return [lo hi] for the active region, or nil if no mark is set."
+  [s]
+  (let [b (cur s) p (:point b) m (:mark b)]
+    (when m [(min (long p) (long m)) (max (long p) (long m))])))
+
+(defn- region-edit
+  "Edit the active region by passing its current text through `f`. No-op
+   without a mark. After the edit, point lands at the end of the result
+   and mark is cleared."
+  [s f]
+  (if-let [[lo hi] (region-bounds s)]
+    (let [t   (:text (cur s))
+          new (str (f (gap/substr t lo hi)))]
+      (-> (edit s lo hi new)
+          (update-cur #(assoc % :mark nil))
+          (set-point (fn [_ _] (+ lo (count new))))))
+    s))
+
+(defn upcase-region     [s] (region-edit s #(.toUpperCase ^String %)))
+(defn downcase-region   [s] (region-edit s #(.toLowerCase ^String %)))
+(defn capitalize-region
+  "Capitalize each whitespace-separated word in the region."
+  [s]
+  (region-edit s
+    (fn [^String text]
+      (str/replace text #"\b\p{L}\p{L}*"
+        (fn [w] (str (.toUpperCase (subs w 0 1)) (.toLowerCase ^String (subs w 1))))))))
+
+(defn mark-whole-buffer
+  "Set mark at end-of-buffer, move point to start. Matches Emacs C-x h."
+  [s]
+  (-> s (update-cur #(assoc % :mark (count (:text %)) :point 0))))
+
+(defn exchange-point-and-mark [s]
+  (let [b (cur s) p (:point b) m (:mark b)]
+    (if m (update-cur s #(assoc % :point m :mark p)) s)))
+
+(defn transpose-chars
+  "Swap the chars on either side of point; advance point past the swap.
+   No-op at start or end of buffer."
+  [s]
+  (let [b (cur s) p (:point b) t (:text b)
+        bef (text/prev-pos t p)
+        aft (text/next-pos t p)]
+    (if (or (= bef p) (= aft p))
+      s
+      (let [c1 (gap/substr t bef p)
+            c2 (gap/substr t p aft)]
+        (-> s (edit bef aft (str c2 c1))
+              (set-point (fn [_ _] aft)))))))
+
+(defn transpose-lines
+  "Swap the current line with the previous line; point lands on what was
+   the previous line. No-op when on line 0."
+  [s]
+  (let [b (cur s) p (:point b) t (:text b)
+        ln (gap/line-of t p)]
+    (if (zero? ln)
+      s
+      (let [a-start (gap/nth-line-start t (dec ln))
+            a-end   (gap/nth-line-end   t (dec ln))
+            b-start (gap/nth-line-start t ln)
+            b-end   (gap/nth-line-end   t ln)
+            line-a  (gap/substr t a-start a-end)
+            line-b  (gap/substr t b-start b-end)]
+        (-> s (edit a-start b-end (str line-b "\n" line-a))
+              (set-point (fn [_ _] (+ a-start (count line-b) 1))))))))
