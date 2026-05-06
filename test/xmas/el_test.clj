@@ -4,6 +4,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [xmas.buf :as buf]
+            [xmas.cmd :as cmd]
             [xmas.el :as el]))
 
 (defn r1 [s] (first (el/read-all s)))
@@ -1084,3 +1085,161 @@
     (el/eval-string "(setq x 1)" ed)
     (el/eval-string "(makunbound 'x)" ed)
     (is (not (contains? @(:el-vars @ed) 'x)))))
+
+;; --- Tier A: control-flow special forms ---
+
+(deftest eval-when-true-runs-body
+  (is (= 3 (ev "(when t 1 2 3)"))))
+
+(deftest eval-when-false-skips-body
+  (is (= nil (ev "(when nil 1 2 3)"))))
+
+(deftest eval-unless-true-skips
+  (is (= nil (ev "(unless t 1 2)"))))
+
+(deftest eval-unless-false-runs
+  (is (= 2 (ev "(unless nil 1 2)"))))
+
+(deftest eval-prog1-returns-first
+  (is (= 1 (ev "(prog1 1 2 3)"))))
+
+(deftest eval-prog2-returns-second
+  (is (= 2 (ev "(prog2 1 2 3 4)"))))
+
+(deftest eval-dolist-iterates
+  (let [ed (make-editor "")]
+    (ev "(setq sum 0)" ed)
+    (ev "(dolist (x '(1 2 3)) (setq sum (+ sum x)))" ed)
+    (is (= 6 (get @(:el-vars @ed) 'sum)))))
+
+(deftest eval-dolist-with-result
+  (is (= 99 (ev "(dolist (x '(1 2 3) 99))"))))
+
+(deftest eval-dotimes-iterates
+  (let [ed (make-editor "")]
+    (ev "(setq c 0)" ed)
+    (ev "(dotimes (i 4) (setq c (+ c i)))" ed)
+    (is (= 6 (get @(:el-vars @ed) 'c)))))
+
+(deftest eval-save-excursion-restores-point
+  (let [ed (make-editor "hello")]
+    (ev "(goto-char 5)" ed)
+    (ev "(save-excursion (goto-char 0))" ed)
+    (is (= 5 (:point (cmd/cur @ed))))))
+
+(deftest eval-with-current-buffer-switches-and-restores
+  (let [ed (atom {:buf "a"
+                  :bufs {"a" (assoc (buf/make "a" "A" nil) :point 0)
+                         "b" (assoc (buf/make "b" "B" nil) :point 0)}})]
+    (ev "(with-current-buffer \"b\" (insert \"!\"))" ed)
+    (is (= "!B" (str (:text (get-in @ed [:bufs "b"])))))
+    (is (= "a" (:buf @ed)))))
+
+(deftest eval-with-temp-buffer-isolates-and-cleans-up
+  (let [ed (make-editor "outer")]
+    (ev "(with-temp-buffer (insert \"scratch\"))" ed)
+    (is (= "outer" (str (:text (cmd/cur @ed)))))
+    ;; no leftover temp buffers
+    (is (every? #(not (.startsWith ^String % " *temp-")) (keys (:bufs @ed))))))
+
+;; --- Tier A: list builtins ---
+
+(deftest eval-mapcar
+  (is (= '(2 3 4) (ev "(mapcar '1+ '(1 2 3))"))))
+
+(deftest eval-mapc-returns-list
+  (is (= '(1 2 3) (ev "(mapc '1+ '(1 2 3))"))))
+
+(deftest eval-funcall-on-symbol
+  (is (= 7 (ev "(funcall '+ 3 4)"))))
+
+(deftest eval-apply-flattens-last-arg
+  (is (= 10 (ev "(apply '+ 1 2 '(3 4))"))))
+
+(deftest eval-reverse
+  (is (= '(3 2 1) (ev "(reverse '(1 2 3))"))))
+
+(deftest eval-memq-finds
+  (is (= '(2 3) (ev "(memq 2 '(1 2 3))"))))
+
+(deftest eval-assq-finds-pair
+  (is (= '(b 2) (ev "(assq 'b '((a 1) (b 2) (c 3)))"))))
+
+;; --- Tier A: string builtins ---
+
+(deftest eval-upcase
+  (is (= "HELLO" (ev "(upcase \"hello\")"))))
+
+(deftest eval-downcase
+  (is (= "hello" (ev "(downcase \"HELLO\")"))))
+
+(deftest eval-string-match-found
+  (is (= 6 (ev "(string-match \"world\" \"hello world\")"))))
+
+(deftest eval-string-match-not-found
+  (is (= nil (ev "(string-match \"x\" \"abc\")"))))
+
+(deftest eval-replace-regexp-in-string
+  (is (= "hi-world" (ev "(replace-regexp-in-string \" \" \"-\" \"hi world\")"))))
+
+(deftest eval-split-string-default
+  (is (= ["a" "b" "c"] (ev "(split-string \"a b c\")"))))
+
+(deftest eval-number-to-string
+  (is (= "42" (ev "(number-to-string 42)"))))
+
+(deftest eval-string-to-number
+  (is (= 42 (ev "(string-to-number \"42\")"))))
+
+;; --- Tier A: math builtins ---
+
+(deftest eval-floor
+  (is (= 3 (ev "(floor 3.7)"))))
+
+(deftest eval-ceiling
+  (is (= 4 (ev "(ceiling 3.2)"))))
+
+(deftest eval-abs-negative
+  (is (= 5 (ev "(abs -5)"))))
+
+(deftest eval-1+
+  (is (= 2 (ev "(1+ 1)"))))
+
+(deftest eval-1-minus
+  (is (= 0 (ev "(1- 1)"))))
+
+(deftest eval-zerop-true
+  (is (= true (ev "(zerop 0)"))))
+
+;; --- Tier A: file path builtins ---
+
+(deftest eval-file-name-nondirectory
+  (is (= "x.txt" (ev "(file-name-nondirectory \"/a/b/x.txt\")"))))
+
+(deftest eval-file-name-directory
+  (is (= "/a/b/" (ev "(file-name-directory \"/a/b/x.txt\")"))))
+
+(deftest eval-file-name-extension
+  (is (= "txt" (ev "(file-name-extension \"x.txt\")"))))
+
+;; --- Tier A: buffer queries ---
+
+(deftest eval-current-buffer
+  (let [ed (make-editor "")]
+    (is (= "*test*" (ev "(current-buffer)" ed)))))
+
+(deftest eval-bufferp-true
+  (let [ed (make-editor "")]
+    (is (= true (ev "(bufferp \"*test*\")" ed)))))
+
+(deftest eval-bufferp-false
+  (is (= false (ev "(bufferp \"nope\")"))))
+
+;; --- Tier A: misc ---
+
+(deftest eval-functionp-builtin
+  (is (= true (ev "(functionp '+)"))))
+
+(deftest eval-keywordp-on-self-eval-symbol
+  ;; :foo parses as a symbol that starts with ":" (self-evaluating)
+  (is (= false (ev "(keywordp ':foo)"))))

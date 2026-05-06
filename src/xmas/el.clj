@@ -1,6 +1,8 @@
 (ns xmas.el
   (:refer-clojure :exclude [eval read])
-  (:require [xmas.cmd :as cmd]
+  (:require [clojure.string :as str]
+            [xmas.buf :as buf]
+            [xmas.cmd :as cmd]
             [xmas.mode :as mode]
             [xmas.overlay :as ov]
             [xmas.text :as text])
@@ -372,6 +374,82 @@
       (eval-body body)
       (recur))))
 
+(defn- eval-dolist
+  "(dolist (VAR LIST [RESULT]) BODY...) — bind VAR to each element of LIST,
+   eval BODY; after the loop VAR is nil and RESULT (if given) is the value."
+  [[[var-sym list-form & maybe-result] & body]]
+  (let [items (eval list-form)
+        outer @*vars*]
+    (try
+      (doseq [item items]
+        (swap! *vars* assoc var-sym item)
+        (eval-body body))
+      (swap! *vars* assoc var-sym nil)
+      (eval (first maybe-result))
+      (finally (restore-vars! outer [var-sym])))))
+
+(defn- eval-dotimes
+  "(dotimes (VAR N [RESULT]) BODY...) — bind VAR to 0..N-1, eval BODY each time."
+  [[[var-sym n-form & maybe-result] & body]]
+  (let [n     (long (or (eval n-form) 0))
+        outer @*vars*]
+    (try
+      (dotimes [i n]
+        (swap! *vars* assoc var-sym i)
+        (eval-body body))
+      (eval (first maybe-result))
+      (finally (restore-vars! outer [var-sym])))))
+
+(defn- eval-save-excursion
+  "(save-excursion BODY...) — save point and mark of the current buffer,
+   eval BODY, restore them. Buffer name itself is also restored so
+   `with-current-buffer` inside BODY doesn't leak."
+  [body]
+  (let [s   @*state*
+        buf (:buf s)
+        b   (cmd/buf s buf)
+        sp  (:point b)
+        sm  (:mark b)]
+    (try (eval-body body)
+         (finally
+           (swap! *state*
+                  (fn [s2]
+                    (cond-> (assoc s2 :buf buf)
+                      (contains? (:bufs s2) buf)
+                      (-> (assoc-in [:bufs buf :point] sp)
+                          (assoc-in [:bufs buf :mark]  sm)))))))))
+
+(defn- buffer-name-of [x]
+  (cond (string? x) x
+        (map? x)    (:name x)
+        :else       (str x)))
+
+(defn- eval-with-current-buffer
+  "(with-current-buffer BUFFER BODY...) — switch :buf for the duration of BODY."
+  [[buf-form & body]]
+  (let [target (buffer-name-of (eval buf-form))
+        prev   (:buf @*state*)]
+    (when-not (contains? (:bufs @*state*) target)
+      (err (str "No buffer: " target)))
+    (try
+      (swap! *state* assoc :buf target)
+      (eval-body body)
+      (finally (swap! *state* assoc :buf prev)))))
+
+(defn- eval-with-temp-buffer
+  "(with-temp-buffer BODY...) — create an unnamed scratch buffer, run BODY in
+   it, then drop it. The temp buffer never appears in buflist (leading space)."
+  [body]
+  (let [name (str " *temp-" (System/nanoTime) "*")
+        prev (:buf @*state*)]
+    (try
+      (swap! *state* #(-> %
+                          (assoc-in [:bufs name] (buf/make name))
+                          (assoc :buf name)))
+      (eval-body body)
+      (finally
+        (swap! *state* #(-> % (assoc :buf prev) (update :bufs dissoc name)))))))
+
 (defn- eval-and [args]
   (reduce (fn [_ f] (or (eval f) (reduced nil))) true args))
 
@@ -668,6 +746,20 @@
   (let [load-pkg (requiring-resolve 'xmas.pkg/load-package)]
     (load-pkg (clojure.core/name name) *state*)))
 
+;; --- funcall / apply ---
+
+(defn- funcall-impl
+  "Dispatch a value (Clojure fn, user-fn map, or symbol) onto args. Used by
+   both the `funcall` and `apply` builtins."
+  [f args]
+  (cond
+    (fn? f)     (apply f args)
+    (map? f)    (apply-user-fn f args)
+    (symbol? f) (let [target (or (get @*fns* f) (get builtins f))]
+                  (when-not target (err (str "Void function: " f)))
+                  (funcall-impl target args))
+    :else       (err (str "Not a function: " (pr-str f)))))
+
 ;; --- Built-in function table ---
 
 (def ^:private builtins
@@ -748,7 +840,78 @@
    ;; Tracks names as a set for introspection; does not load on require.
    'provide          (fn [feat] (swap! *state* update :provided-features (fnil conj #{}) feat) feat)
    'require          (fn [feat & _] (contains? (:provided-features @*state*) feat))
-   'featurep         (fn [feat] (contains? (:provided-features @*state*) feat))})
+   'featurep         (fn [feat] (contains? (:provided-features @*state*) feat))
+
+   ;; --- list ops ---
+   'funcall   (fn [f & args] (funcall-impl f args))
+   'apply     (fn [f & args] (funcall-impl f (concat (butlast args) (last args))))
+   'mapcar    (fn [f l] (apply list (map #(funcall-impl f [%]) l)))
+   'mapc      (fn [f l] (run! #(funcall-impl f [%]) l) l)
+   'reverse   reverse
+   'sort      (fn [l pred] (sort #(if (funcall-impl pred [%1 %2]) -1 1) l))
+   'memq      (fn [x l] (drop-while #(not= x %) l))
+   'assq      (fn [k al] (some (fn [p] (when (and (sequential? p) (= k (first p))) p)) al))
+   'nthcdr    (fn [n l] (drop n l))
+   'last      (fn [l] (let [xs (take-last 2 l)] (if (= 2 (count xs)) (cons (last xs) nil) xs)))
+
+   ;; --- string ops ---
+   'upcase     (fn [^String s] (.toUpperCase s))
+   'downcase   (fn [^String s] (.toLowerCase s))
+   'capitalize (fn [^String s] (str/capitalize s))
+   'string-trim         (fn [^String s] (str/trim s))
+   'split-string        (fn ([s] (str/split s #"[ \t\n]+"))
+                            ([s sep] (vec (str/split s (re-pattern sep)))))
+   'string-match        (fn [re s]
+                          (let [m (.matcher (re-pattern re) ^String s)]
+                            (when (.find m) (.start m))))
+   'replace-regexp-in-string (fn [re repl ^String s] (str/replace s (re-pattern re) repl))
+   'number-to-string    (fn [n] (str n))
+   'string-to-number    (fn [^String s] (try (Long/parseLong (str/trim s))
+                                          (catch Exception _
+                                            (try (Double/parseDouble (str/trim s))
+                                              (catch Exception _ 0)))))
+
+   ;; --- math ---
+   'floor    (fn [x] (long (Math/floor (double x))))
+   'ceiling  (fn [x] (long (Math/ceil (double x))))
+   'abs      (fn [x] (if (neg? x) (- x) x))
+   'min      min,    'max max
+   (symbol "1+") inc, (symbol "1-") dec
+   'zerop    zero?
+
+   ;; --- file paths ---
+   'expand-file-name        (fn ([^String p] (.getAbsolutePath (java.io.File. p)))
+                                ([^String p ^String dir]
+                                 (.getAbsolutePath
+                                   (if (.isAbsolute (java.io.File. p))
+                                     (java.io.File. p)
+                                     (java.io.File. dir p)))))
+   'file-exists-p           (fn [^String p] (.exists (java.io.File. p)))
+   'file-name-directory     (fn [^String p] (when-let [d (.getParent (java.io.File. p))]
+                                              (str d "/")))
+   'file-name-nondirectory  (fn [^String p] (.getName (java.io.File. p)))
+   'file-name-extension     (fn [^String p] (let [n (.getName (java.io.File. p))
+                                                  i (.lastIndexOf n ".")]
+                                              (when (pos? i) (subs n (inc i)))))
+
+   ;; --- env ---
+   'getenv  (fn [n] (System/getenv (clojure.core/name n)))
+   'setenv  (fn [_n _v] (err "setenv: process env is read-only"))
+
+   ;; --- buffer queries ---
+   'current-buffer (fn [] (:buf @*state*))
+   'buffer-list    (fn [] (apply list (sort (keys (:bufs @*state*)))))
+   'bufferp        (fn [x] (and (string? x) (contains? (:bufs @*state*) x)))
+
+   ;; --- misc shims ---
+   'kbd          parse-key-string
+   'interactive  (fn [& _] nil)
+   'derived-mode-p (fn [& _] nil)
+   'functionp    (fn [x] (or (fn? x) (and (map? x) (contains? x :body))
+                             (and (symbol? x) (contains? builtins x))
+                             (and (symbol? x) (contains? @*fns* x))))
+   'keywordp     keyword?
+   'vectorp      vector?})
 
 ;; --- Eval ---
 
@@ -811,6 +974,18 @@
         while   (eval-while args)
         and     (eval-and args)
         or      (eval-or args)
+        when    (clojure.core/when     (eval (first args)) (eval-body (rest args)))
+        unless  (clojure.core/when-not (eval (first args)) (eval-body (rest args)))
+        prog1   (let [v (eval (first args))] (eval-body (rest args)) v)
+        prog2   (do (eval (first args))
+                    (let [v (eval (second args))]
+                      (eval-body (drop 2 args))
+                      v))
+        dolist               (eval-dolist args)
+        dotimes              (eval-dotimes args)
+        save-excursion       (eval-save-excursion args)
+        with-current-buffer  (eval-with-current-buffer args)
+        with-temp-buffer     (eval-with-temp-buffer args)
         condition-case   (eval-condition-case args)
         unwind-protect   (eval-unwind-protect args)
         catch            (eval-catch args)
