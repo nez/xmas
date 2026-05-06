@@ -1308,3 +1308,30 @@
         scroll (get-in s' [:windows :scroll])]
     (is (some? scroll))
     (is (>= scroll 18))))            ;; scroll on line 9 = pos 18 (each line is 2 chars "x\n")
+
+;; --- Tier E: live-filter completion ---
+
+(deftest live-filter-narrows-on-typing
+  ;; Open M-x, type characters; candidates should filter live without TAB.
+  (let [s  (make-state "" 0)
+        s1 (ed/handle-key s [:meta \x])              ;; opens M-x mini
+        ;; M-x is wired with command-completer — empty input gives all commands
+        s2 (ed/handle-key s1 \q)                     ;; type "q"
+        s3 (ed/handle-key s2 \u)                     ;; type "qu"
+        cs2 (get-in s2 [:mini :candidates])
+        cs3 (get-in s3 [:mini :candidates])]
+    ;; "q" should match at least query-replace-related commands
+    (is (every? #(.startsWith ^String % "q") cs2))
+    ;; narrowing: cs3 should be a subset of cs2
+    (is (<= (count cs3) (count cs2)))
+    (is (every? #(.startsWith ^String % "qu") cs3))))
+
+(deftest live-filter-clears-on-backspace
+  (let [s  (make-state "" 0)
+        s1 (ed/handle-key s [:meta \x])
+        s2 (ed/handle-key s1 \q)
+        s3 (ed/handle-key s2 :backspace)
+        cs1 (count (get-in s1 [:mini :candidates]))
+        cs3 (count (get-in s3 [:mini :candidates]))]
+    ;; back to empty input → candidates restored
+    (is (= cs1 cs3))))

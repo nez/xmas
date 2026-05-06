@@ -516,6 +516,17 @@
           (assoc-in [:mini :candidates] (vec candidates))))
     s))
 
+(defn- mini-refresh-candidates
+  "Run the completer with the current minibuffer text and stash matches on
+   :mini. Called after every keystroke so candidates narrow live as the
+   user types — no TAB needed."
+  [s]
+  (if-let [completer (and (:mini s) (get-in s [:mini :completer]))]
+    (let [input (str (:text (cur s)))
+          {:keys [candidates]} (completer input s)]
+      (assoc-in s [:mini :candidates] (vec candidates)))
+    s))
+
 (declare handle-key)
 
 ;; --- Incremental search ---
@@ -1079,10 +1090,14 @@
                           (not (map? binding))
                           (not= binding universal-argument))
                      (dissoc :prefix-arg))))))]
-    ;; :exit-pending survives only the command that set it.
-    (cond-> s'
-      (and (not (:pending s')) prev-exit-pending (:exit-pending s'))
-      (dissoc :exit-pending))))
+    ;; Refresh live-filter candidates after every keystroke that left us
+    ;; in a minibuffer. mini-tab-complete also runs this implicitly via
+    ;; its own assoc, so this is a no-op in that case.
+    (let [s' (cond-> s' (:mini s') mini-refresh-candidates)]
+      ;; :exit-pending survives only the command that set it.
+      (cond-> s'
+        (and (not (:pending s')) prev-exit-pending (:exit-pending s'))
+        (dissoc :exit-pending)))))
 
 ;; --- Main ---
 

@@ -306,7 +306,8 @@
   (cond
     (:mini state)
     (let [mb (get (:bufs state) (:buf state))]
-      [:mini (get-in state [:mini :prompt]) (str (:text mb)) (:point mb)])
+      [:mini (get-in state [:mini :prompt]) (str (:text mb)) (:point mb)
+       (get-in state [:mini :candidates])])
     (:isearch state)
     [:isearch (:direction (:isearch state)) (:pattern (:isearch state))]
     :else [:msg (:msg state)]))
