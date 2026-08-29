@@ -600,6 +600,9 @@
     (is (= "No region" (:msg s1)))
     (is (= "hello" (text s1)))))
 
+(deftest shell-command-drains-large-output
+  (is (= 200000 (count (#'ed/run-shell "head -c 200000 /dev/zero")))))
+
 ;; --- Auto-save ---
 
 (deftest auto-save-writes-backup-when-threshold-crossed
@@ -624,6 +627,14 @@
                (assoc-in [:bufs "*test*" :edit-count] 5))
         s1 (ed/auto-save! s0)]
     (is (= 5 (get-in s1 [:bufs "*test*" :edit-count])))))
+
+(deftest auto-save-retries-after-write-failure
+  (let [s (-> (make-state "x")
+              (assoc-in [:bufs "*test*" :file] "/does/not/matter")
+              (assoc-in [:bufs "*test*" :edit-count] 500))]
+    (with-redefs-fn {#'xmas.ed/atomic-spit (fn [& _] (throw (java.io.IOException. "full")))}
+      #(is (= 500 (get-in (ed/auto-save! s)
+                          [:bufs "*test*" :edit-count]))))))
 
 (deftest save-buffer-deletes-auto-save
   (let [f (java.io.File/createTempFile "xmas-sas-" ".txt")]

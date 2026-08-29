@@ -1,8 +1,10 @@
 (ns xmas.web-test
-  (:require [clojure.test :refer [deftest is testing]]
-            [xmas.web :as web]
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is]]
+            [org.httpkit.server :as http]
             [xmas.buf :as buf]
-            [xmas.ed :as ed]
+            [xmas.term :as term]
+            [xmas.web :as web]
             [xmas.window :as win]))
 
 (defn make-state [text]
@@ -27,9 +29,31 @@
 (deftest render-to-string-does-not-corrupt-term-out
   (let [s (make-state "abc")
         ;; capture that real term/out is unaffected
-        before (str xmas.term/real-out)]
+        before (str term/real-out)]
     (web/render-to-string s)
-    (is (= before (str xmas.term/real-out)))))
+    (is (= before (str term/real-out)))))
+
+(deftest render-sanitizes-buffer-control-bytes
+  (let [payload (str (char 27) "[31mPWN")
+        result (web/render-to-string (make-state payload))]
+    (is (not (.contains result payload)))
+    (is (.contains result "�[31mPWN"))))
+
+(deftest websocket-keys-are-bounded-and-validated
+  (is (= [:ctrl \x] (#'web/parse-key "[:ctrl \\x]")))
+  (is (= "😀" (#'web/parse-key "\"😀\"")))
+  (is (nil? (#'web/parse-key "{:not :a-key}")))
+  (is (nil? (#'web/parse-key (apply str (repeat 65 "x"))))))
+
+(deftest server-binds-to-loopback
+  (let [opts (atom nil)
+        editor (atom (make-state ""))]
+    (with-redefs [http/run-server (fn [_handler options]
+                                    (reset! opts options)
+                                    (fn []))]
+      (let [srv (web/start! editor 1234 identity)]
+        (is (= "127.0.0.1" (:ip @opts)))
+        (web/stop! srv editor)))))
 
 (deftest html-resource-exists
-  (is (some? (clojure.java.io/resource "xmas/client.html"))))
+  (is (some? (io/resource "xmas/client.html"))))

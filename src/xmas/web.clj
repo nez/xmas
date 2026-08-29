@@ -8,6 +8,26 @@
 
 (defonce clients (atom #{}))
 
+(def ^:private special-keys
+  #{:tab :return :backspace :escape :up :down :left :right :home :end
+    :insert :delete :page-up :page-down :f1 :f2 :f3 :f4})
+
+(defn- one-codepoint? [^String s]
+  (= 1 (.codePointCount s 0 (.length s))))
+
+(defn- valid-key? [key]
+  (or (char? key)
+      (and (string? key) (one-codepoint? key))
+      (contains? special-keys key)
+      (and (vector? key) (= 2 (count key))
+           (contains? #{:ctrl :meta} (first key))
+           (char? (second key)))))
+
+(defn- parse-key [msg]
+  (when (<= (count msg) 64)
+    (let [key (edn/read-string msg)]
+      (when (valid-key? key) key))))
+
 (defn render-to-string [s]
   (let [sb (StringBuilder.)]
     (binding [t/*out-fn* (fn [x] (.append sb (str x)))]
@@ -39,8 +59,9 @@
        (log/log "web: client disconnected"))
      :on-receive (fn [_ch msg]
        (try
-         (let [key (edn/read-string msg)]
-           (swap! editor-atom #(handle-key-fn % key)))
+         (if-let [key (parse-key msg)]
+           (swap! editor-atom #(handle-key-fn % key))
+           (log/log "web: invalid key" (pr-str msg)))
          (catch Exception e
            (log/log "web: bad key" (.getMessage e)))))}))
 
@@ -54,7 +75,8 @@
 
 (defn start! [editor-atom port handle-key-fn]
   (add-watch editor-atom :web broadcast!)
-  (let [srv (http/run-server (handler editor-atom handle-key-fn) {:port port})]
+  (let [srv (http/run-server (handler editor-atom handle-key-fn)
+                             {:port port :ip "127.0.0.1"})]
     (log/log "web: listening on" port)
     srv))
 

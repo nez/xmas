@@ -54,6 +54,9 @@
 
 (defn- set-face! [face] (t/sg (get faces face (:default faces))))
 
+(defn- safe-text [^String s]
+  (str/replace s #"[\x00-\x1f\x7f]" "�"))
+
 (defn- write-spans!
   "Write row at (screen-row, screen-col) with face spans. Content is clipped
    to `width` columns (at most), and remaining columns are padded with spaces.
@@ -74,7 +77,7 @@
             b (min (long to) end)]
         (when (< a b)
           (set-face! face)
-          (t/tw (subs glyphs a b)))))
+          (t/tw (safe-text (subs glyphs a b))))))
     (t/reset-sg)
     (when (< used-cols width)
       (t/tw (pad-spaces (- width used-cols))))))

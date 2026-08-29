@@ -214,8 +214,9 @@
         (with-open [os (.getOutputStream p)]
           (.write os (.getBytes stdin "UTF-8")))
         (.close (.getOutputStream p)))
-      (.waitFor p)
-      (slurp (.getInputStream p) :encoding "UTF-8"))
+      (let [out (slurp (.getInputStream p) :encoding "UTF-8")]
+        (.waitFor p)
+        out))
     (catch Exception e (str "Error: " (.getMessage e)))))
 
 (defn shell-command-on-region
@@ -251,12 +252,12 @@
         (msg s output)))))
 
 (defn- auto-save-due
-  "Pure: return [[buf-name file text] ...] for every buffer at or above the
+  "Pure: return [[buf-name file text version] ...] for every buffer at or above the
    auto-save threshold."
   [s]
   (keep (fn [[name b]]
           (when (and (:file b) (>= (or (:edit-count b) 0) auto-save-threshold))
-            [name (:file b) (str (:text b))]))
+            [name (:file b) (str (:text b)) (:version b)]))
         (:bufs s)))
 
 (defn- reset-edit-counts
@@ -264,20 +265,29 @@
    Guards against racing edits: a concurrent save-buffer that already
    zeroed the counter is respected."
   [s due]
-  (reduce (fn [s [name _ _]]
+  (reduce (fn [s [name _ _ version]]
             (cond-> s
-              (>= (or (get-in s [:bufs name :edit-count]) 0) auto-save-threshold)
+              (and (= version (get-in s [:bufs name :version]))
+                   (>= (or (get-in s [:bufs name :edit-count]) 0)
+                       auto-save-threshold))
               (assoc-in [:bufs name :edit-count] 0)))
           s due))
 
 (defn- spit-due!
-  "Write each [_ file text] tuple to its auto-save path, swallowing errors.
+  "Write each [_ file text version] tuple to its auto-save path. Returns the
+   entries written successfully and logs failures.
    Uses atomic-spit so a crash mid-write can't leave the backup truncated —
    the whole point of the backup is to be usable after unclean shutdown."
   [due]
-  (doseq [[_ file text] due]
-    (try (atomic-spit (auto-save-path file) text)
-         (catch Exception _))))
+  (into []
+        (keep (fn [[_ file text :as entry]]
+                (try
+                  (atomic-spit (auto-save-path file) text)
+                  entry
+                  (catch Exception e
+                    (log/log "auto-save failed:" file (.getMessage e))
+                    nil))))
+        due))
 
 (defn auto-save!
   "For each file-backed buffer whose edit-count crossed the threshold,
@@ -285,8 +295,7 @@
    Do not call from inside a `swap!` — a CAS retry would re-spit the file."
   [s]
   (let [due (auto-save-due s)]
-    (spit-due! due)
-    (reset-edit-counts s due)))
+    (reset-edit-counts s (spit-due! due))))
 
 (defn- auto-save-tick!
   "Drive auto-save against the editor atom. Spits happen once per tick
@@ -294,8 +303,9 @@
   [editor-atom]
   (let [due (auto-save-due @editor-atom)]
     (when (seq due)
-      (spit-due! due)
-      (swap! editor-atom reset-edit-counts due))))
+      (let [saved (spit-due! due)]
+        (when (seq saved)
+          (swap! editor-atom reset-edit-counts saved))))))
 
 (defn save-buffer [s]
   (let [b (cur s)
