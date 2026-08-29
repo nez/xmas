@@ -57,4 +57,7 @@
         s {:buf "t" :bufs {"t" b}
            :windows tree :cur-window path
            :rows 3 :cols 10}]
-    (is (map? (view/render s)))))
+    (let [out (StringBuilder.)]
+      (binding [xmas.term/*out-fn* #(.append out (str %))]
+        (is (map? (view/render s))))
+      (is (not (.contains (str out) (str (char 27) "[0;1H")))))))

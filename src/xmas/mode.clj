@@ -33,10 +33,12 @@
       (run-hooks (hook-name-for mode-name))))
 
 (defn toggle-minor-mode [s mode-name]
-  (let [active? (contains? (:minor-modes (cmd/cur s) #{}) mode-name)
-        op      (if active? disj conj)]
+  (let [active (vec (:minor-modes (cmd/cur s)))
+        active? (some #{mode-name} active)
+        next-active (if active? (filterv #(not= mode-name %) active)
+                                (conj active mode-name))]
     (-> s
-        (cmd/update-cur #(update % :minor-modes (fnil op #{}) mode-name))
+        (cmd/update-cur #(assoc % :minor-modes next-active))
         (run-hooks (hook-name-for mode-name)))))
 
 ;; --- Key lookup ---
@@ -45,7 +47,7 @@
 (defn lookup-key [s key]
   (let [b (cmd/cur s)]
     (or (some (fn [m] (get-in s [:modes m :keymap key]))
-              (:minor-modes b))
+              (rseq (vec (:minor-modes b))))
         (get-in s [:modes (:mode b) :keymap key]))))
 
 ;; --- File extension → mode ---

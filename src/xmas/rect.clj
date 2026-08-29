@@ -87,7 +87,7 @@
 (defn clear-rectangle
   "Replace each line's rectangle fragment with spaces of the same width."
   [s]
-  (per-line s #(apply str (repeat (count %) \space))))
+  (per-line s #(.repeat " " (text/display-width %))))
 
 (defn string-rectangle
   "Replace the rectangle on each line with `str`."

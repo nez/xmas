@@ -569,6 +569,11 @@
     (is (= "abc\ndef" (text s1)))
     (is (nil? (:query-replace s1)))))
 
+(deftest query-replace-reports-invalid-regexp
+  (let [s (#'xmas.ed/query-replace-begin (make-state "abc") "[" "x" true)]
+    (is (.startsWith ^String (:msg s) "Invalid regexp:"))
+    (is (nil? (:query-replace s)))))
+
 ;; --- Shell command ---
 
 (deftest shell-command-single-line-goes-to-msg
@@ -1368,6 +1373,15 @@
                (run-keys [:ctrl \x] \r \j \a))]            ;; jump back
     (is (= 3 (point s')))))
 
+(deftest jump-to-window-register-restores-current-buffer
+  (let [s0 (-> (make-state "a")
+               (assoc-in [:bufs "other"] (buf/make "other" "b" nil)))
+        s1 (run-keys s0 [:ctrl \x] \r \w \a)
+        s2 (xmas.cmd/set-cur-buffer s1 "other")
+        s3 (run-keys s2 [:ctrl \x] \r \j \a)]
+    (is (= "*test*" (:buf s3)))
+    (is (= "*test*" (get-in s3 [:windows :buffer])))))
+
 (deftest copy-and-insert-register
   (let [s  (-> (make-state "hello" 5) (with-mark 0))
         s' (-> s
@@ -1402,6 +1416,11 @@
   (let [s  (-> (make-state "abcd\nefgh\n" 0) (with-mark 7))
         s' (rect/clear-rectangle s)]
     (is (= "  cd\n  gh\n" (text s')))))
+
+(deftest clear-rectangle-preserves-cjk-display-width
+  (let [s (-> (make-state "你x\n你y" 0) (with-mark 4))
+        s' (rect/clear-rectangle s)]
+    (is (= "  x\n  y" (text s')))))
 
 (deftest string-rectangle-replaces
   (let [s  (-> (make-state "abcd\nefgh\n" 0) (with-mark 7))
@@ -1484,3 +1503,12 @@
 (deftest persist-load-default-on-missing
   (is (= :default-val
          (persist/load! "definitely-not-a-real-file-name-xxx" :default-val))))
+
+(deftest persisted-state-is-shape-checked
+  (is (= {:bookmarks {"ok" {:buf "b" :pos 1}}
+          :recentf ["/ok"]
+          :mini-history ["good"]}
+         (#'ed/sanitize-persisted
+           {"ok" {:buf "b" :pos 1} "bad" {:buf 2 :pos -1}}
+           ["/ok" 42]
+           ["good" {:bad true}]))))

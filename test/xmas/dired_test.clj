@@ -53,7 +53,9 @@
             s2 (dired/mark-delete s1)
             txt (str (:text (cmd/cur s2)))
             line1-start (gap/nth-line-start (:text (cmd/cur s2)) 1)]
-        (is (= \D (.charAt ^CharSequence txt (int line1-start)))))
+        (is (= \D (.charAt ^CharSequence txt (int line1-start))))
+        (is (false? (:modified (cmd/cur s2))))
+        (is (empty? (:undo (cmd/cur s2)))))
       (finally (cleanup-dir d)))))
 
 (deftest unmark-resets-char

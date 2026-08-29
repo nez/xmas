@@ -1,8 +1,7 @@
 (ns xmas.pkg
   "Minimal package manager: packages live under ~/.xmas/packages/<name>/
    and expose a <name>.el file that we eval on load."
-  (:require [clojure.java.io :as io]
-            [xmas.el :as el]
+  (:require [xmas.el :as el]
             [xmas.log :as log])
   (:import [java.io File]))
 
@@ -27,7 +26,11 @@
   []
   (let [d (File. (packages-dir))]
     (if (.isDirectory d)
-      (vec (sort (.list d)))
+      (->> (or (.listFiles d) [])
+           (filter #(valid-name? (.getName ^File %)))
+           (filter #(.isFile (pkg-file (.getName ^File %))))
+           (map #(.getName ^File %))
+           sort vec)
       [])))
 
 (defn load-package
@@ -63,7 +66,9 @@
         target (File. parent pkg)]
     (.mkdirs parent)
     (if (.exists target)
-      {:status :ok :msg (str pkg " already installed")}
+      (if (.isFile (pkg-file pkg))
+        {:status :ok :msg (str pkg " already installed")}
+        {:status :err :msg (str pkg " exists but is not a valid package")})
       (try
         (let [pb   (doto (ProcessBuilder. ["git" "clone" "--" url (.getAbsolutePath target)])
                      (.redirectErrorStream true))

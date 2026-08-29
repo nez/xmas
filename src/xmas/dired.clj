@@ -1,8 +1,7 @@
 (ns xmas.dired
   "Directory listing buffers built on listbuf. Marks live here because they
    mutate buffer text directly; navigation/refresh delegate to listbuf."
-  (:require [xmas.buf :as buf]
-            [xmas.cmd :as cmd]
+  (:require [xmas.cmd :as cmd]
             [xmas.gap :as gap]
             [xmas.listbuf :as listbuf])
   (:import [java.io File]))
@@ -72,7 +71,11 @@
     ;; the line is empty would eat the newline and weld two file rows.
     (if (or (zero? ln) (>= start eol))
       s
-      (cmd/update-cur s #(buf/edit % start (inc start) (str ch))))))
+      (cmd/update-cur s
+        #(if (= ch (.charAt ^CharSequence (:text %) (int start)))
+           %
+           (-> % (assoc :text (gap/edit (:text %) start (inc start) (str ch)))
+                 (update :version (fnil inc 0))))))))
 
 (defn mark-delete [s] (-> s (set-mark-char \D) goto-next-line))
 (defn unmark      [s] (-> s (set-mark-char \space) goto-next-line))

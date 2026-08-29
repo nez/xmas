@@ -4,7 +4,8 @@
    convenience, not correctness, and a corrupt or missing file should
    never prevent the editor from starting."
   (:require [clojure.edn :as edn]
-            [clojure.java.io :as io])
+            [clojure.java.io :as io]
+            [xmas.log :as log])
   (:import [java.io PushbackReader]))
 
 (defn- xmas-dir ^java.io.File []
@@ -22,7 +23,9 @@
        (try
          (with-open [r (PushbackReader. (io/reader f))]
            (edn/read {:default (fn [_ v] v)} r))
-         (catch Exception _ default))
+         (catch Exception e
+           (log/log "persistence read failed:" name (.getMessage e))
+           default))
        default))))
 
 (defn save!
@@ -38,4 +41,7 @@
   "Like save! but swallows IO errors (the common case for autosaving
    convenience data on every change)."
   [name value]
-  (try (save! name value) (catch Exception _ nil)))
+  (try (save! name value)
+       (catch Exception e
+         (log/log "persistence write failed:" name (.getMessage e))
+         nil)))

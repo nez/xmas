@@ -60,36 +60,38 @@
 (defn- write-spans!
   "Write row at (screen-row, screen-col) with face spans. Content is clipped
    to `width` columns (at most), and remaining columns are padded with spaces.
-   `hscroll` is the horizontal offset into glyphs (0 for modeline etc.)."
+  `hscroll` is the horizontal offset into glyphs (0 for modeline etc.)."
   [screen-row screen-col width glyphs spans hscroll]
-  (t/move screen-row screen-col)
-  (let [n (count glyphs)
-        scrolled (pos? hscroll)
-        start (if scrolled (text/pos-at-col glyphs 0 n hscroll) 0)
-        avail (if scrolled (dec width) width)
-        end   (text/pos-at-col glyphs start n avail)
-        ;; visible display width used
-        used-cols (cond-> (text/display-width glyphs start end)
-                    scrolled inc)]
-    (when scrolled (set-face! :default) (t/tw "$"))
-    (doseq [[from to face] spans]
-      (let [a (max (long from) start)
-            b (min (long to) end)]
-        (when (< a b)
-          (set-face! face)
-          (t/tw (safe-text (subs glyphs a b))))))
-    (t/reset-sg)
-    (when (< used-cols width)
-      (t/tw (pad-spaces (- width used-cols))))))
+  (when (pos? width)
+    (t/move screen-row screen-col)
+    (let [n (count glyphs)
+          scrolled (pos? hscroll)
+          start (if scrolled (text/pos-at-col glyphs 0 n hscroll) 0)
+          avail (if scrolled (dec width) width)
+          end   (text/pos-at-col glyphs start n avail)
+          ;; visible display width used
+          used-cols (cond-> (text/display-width glyphs start end)
+                      scrolled inc)]
+      (when scrolled (set-face! :default) (t/tw "$"))
+      (doseq [[from to face] spans]
+        (let [a (max (long from) start)
+              b (min (long to) end)]
+          (when (< a b)
+            (set-face! face)
+            (t/tw (safe-text (subs glyphs a b))))))
+      (t/reset-sg)
+      (when (< used-cols width)
+        (t/tw (pad-spaces (- width used-cols)))))))
 
 (defn- fill-row!
   "Emit `width` spaces with `face` at (screen-row, screen-col). Used to clear
    trailing window rows and to paint dividers."
   [screen-row screen-col width face]
-  (t/move screen-row screen-col)
-  (set-face! face)
-  (t/tw (pad-spaces width))
-  (t/reset-sg))
+  (when (pos? width)
+    (t/move screen-row screen-col)
+    (set-face! face)
+    (t/tw (pad-spaces width))
+    (t/reset-sg)))
 
 (defn apply-face-range
   "Split `spans` at [from, to), painting that slice with `overlay-face`.
@@ -202,7 +204,8 @@
                  (str ml (pad-spaces (- cols mw)))
                  (subs ml 0 (text/pos-at-col ml 0 (count ml) cols)))
         face (if current? :modeline :inactive)]
-    (write-spans! (+ row (dec rows)) col cols padded [[0 (count padded) face]] 0)))
+    (when (pos? rows)
+      (write-spans! (+ row (dec rows)) col cols padded [[0 (count padded) face]] 0))))
 
 (defn- render-one-window
   "Render one window into its rect. Returns
@@ -364,14 +367,15 @@
           (render-echo-area state)
           (when-not (:mini state)
             (let [rect (get layouts cur-path)
-                  win  (get @rendered cur-path)
-                  content (:text (get (:bufs state) (:buffer win)))
-                  scroll-line (gap/line-of content (:scroll win))
-                  body-rows (dec (:rows rect))
-                  row-in-win (min (- (:point-line win) scroll-line) (dec body-rows))
-                  col-in-win (cond-> (- (:cursor-col win) (:hscroll win))
-                                     (pos? (:hscroll win)) inc)]
-              (t/move (+ (:row rect) row-in-win) (+ (:col rect) col-in-win))))
+                  win  (get @rendered cur-path)]
+              (when (and rect win (> (:rows rect) 1) (pos? (:cols rect)))
+                (let [content (:text (get (:bufs state) (:buffer win)))
+                      scroll-line (gap/line-of content (:scroll win))
+                      body-rows (dec (:rows rect))
+                      row-in-win (min (- (:point-line win) scroll-line) (dec body-rows))
+                      col-in-win (cond-> (- (:cursor-col win) (:hscroll win))
+                                         (pos? (:hscroll win)) inc)]
+                  (t/move (+ (:row rect) row-in-win) (+ (:col rect) col-in-win))))))
           (t/show-cur))
         (let [cur-win (get @rendered cur-path)]
           {:sig sig

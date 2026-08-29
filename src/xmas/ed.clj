@@ -695,13 +695,11 @@
 (defn- regex-find
   "Return [start end groups] for the next match of `pattern` at or after `from`, or nil."
   [^CharSequence t ^String pattern ^long from]
-  (try
-    (let [m (re-matcher (re-pattern pattern) t)]
-      (when (.find m (int from))
-        [(.start m) (.end m)
-         (vec (for [i (range (inc (.groupCount m)))]
-                (or (.group m (int i)) "")))]))
-    (catch Exception _ nil)))
+  (let [m (re-matcher (re-pattern pattern) t)]
+    (when (.find m (int from))
+      [(.start m) (.end m)
+       (vec (for [i (range (inc (.groupCount m)))]
+              (or (.group m (int i)) "")))])))
 
 (defn- expand-replacement
   "Replace \\N in `template` with the corresponding match group."
@@ -759,10 +757,14 @@
 (defn- query-replace-begin
   "Enter query-replace mode at the first match from point."
   [s from to regex?]
-  (let [s (assoc s :query-replace {:from from :to to :count 0 :regex? regex?})]
-    (if (qr-find-next s)
-      (qr-advance s)
-      (msg (dissoc s :query-replace) "No match"))))
+  (if-let [error (when regex?
+                   (try (let [_pattern (re-pattern from)] nil)
+                        (catch java.util.regex.PatternSyntaxException e e)))]
+    (msg s (str "Invalid regexp: " (.getDescription error)))
+    (let [s (assoc s :query-replace {:from from :to to :count 0 :regex? regex?})]
+      (if (qr-find-next s)
+        (qr-advance s)
+        (msg (dissoc s :query-replace) "No match")))))
 
 (defn- qr-prompt-to
   "Having read FROM, prompt for TO and kick off the interactive loop."
@@ -1042,7 +1044,15 @@
                       (set-point (fn [_ _] (min pos (count (:text (cmd/buf s buf)))))))
                 (msg s (str "Buffer gone: " buf))))
             (= :window (:kind r))
-            (assoc s :windows (:windows r) :cur-window (:cur-window r))
+            (let [windows (:windows r)
+                  path (:cur-window r)
+                  valid? (every? #(contains? (:bufs s) (:buffer (get-in windows %)))
+                                 (win/leaves windows))]
+              (if valid?
+                (let [target (get-in windows (conj path :buffer))]
+                  (-> s (assoc :windows windows :cur-window path :buf target)
+                        cmd/load-window-point))
+                (msg s "Window configuration references a killed buffer")))
             :else (msg s (str "Register " ch " is text — use C-x r i"))))
 
         :reg-copy
@@ -1308,14 +1318,27 @@
       register-builtin-modes
       register-builtin-commands))
 
+(defn- sanitize-persisted [bookmarks recentf history]
+  {:bookmarks (if (map? bookmarks)
+                (into {}
+                      (filter (fn [[name {:keys [buf pos]}]]
+                                (and (string? name) (string? buf)
+                                     (nat-int? pos))))
+                      bookmarks)
+                {})
+   :recentf (if (sequential? recentf)
+              (vec (take recentf-limit (filter string? recentf)))
+              [])
+   :mini-history (if (sequential? history) (filterv string? history) [])})
+
 (defn- load-persisted-state!
   "Restore bookmarks, recentf, and mini-history from ~/.xmas/. Missing or
-   corrupt files are silently ignored."
+  corrupt files are silently ignored."
   []
-  (swap! editor assoc
-         :bookmarks    (or (persist/load! "bookmarks") {})
-         :recentf      (or (persist/load! "recentf") [])
-         :mini-history (or (persist/load! "mini-history") [])))
+  (swap! editor merge
+         (sanitize-persisted (persist/load! "bookmarks")
+                             (persist/load! "recentf")
+                             (persist/load! "mini-history"))))
 
 (defn- load-init-files! []
   (let [load! (fn [name loader]

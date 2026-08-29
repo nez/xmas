@@ -35,6 +35,14 @@
               (mode/toggle-minor-mode :m))]
     (is (empty? (:minor-modes (get-in s [:bufs "t"]))))))
 
+(deftest newest-minor-mode-binding-wins
+  (let [s (-> (state)
+              (mode/register :first :minor :keymap {\x :first})
+              (mode/register :second :minor :keymap {\x :second})
+              (mode/toggle-minor-mode :first)
+              (mode/toggle-minor-mode :second))]
+    (is (= :second (mode/lookup-key s \x)))))
+
 (deftest hooks-run-in-order
   (let [tag (atom [])
         hook1 (fn [s] (swap! tag conj :a) s)

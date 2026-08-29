@@ -36,9 +36,19 @@
 (deftest installed-lists-dirs
   (let [[h p] (tmp-home)]
     (try
-      (.mkdir (File. p "alpha"))
-      (.mkdir (File. p "beta"))
+      (doseq [name ["alpha" "beta"]]
+        (let [d (File. p name)]
+          (.mkdir d)
+          (spit (File. d (str name ".el")) "")))
       (with-home h #(is (= ["alpha" "beta"] (pkg/installed))))
+      (finally (rm-rf h)))))
+
+(deftest installed-ignores-incomplete-entries
+  (let [[h p] (tmp-home)]
+    (try
+      (spit (File. p "not-a-package") "")
+      (.mkdir (File. p "partial"))
+      (with-home h #(is (empty? (pkg/installed))))
       (finally (rm-rf h)))))
 
 (deftest load-package-evaluates-el-file

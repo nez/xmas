@@ -893,7 +893,7 @@
       "(progn (define-minor-mode my-minor \"docs\")
               (toggle-minor-mode 'my-minor))"
       ed)
-    (is (= #{'my-minor} (:minor-modes (get (:bufs @ed) "*test*"))))))
+    (is (= ['my-minor] (:minor-modes (get (:bufs @ed) "*test*"))))))
 
 ;; ============================================================
 ;; Tier 1: Reader — backquote / unquote / unquote-splicing

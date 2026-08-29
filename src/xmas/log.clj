@@ -11,7 +11,7 @@
   ([] (init! (str (System/getProperty "user.home") "/.xmas/debug.log")))
   ([path]
    (let [f (java.io.File. path)]
-     (.mkdirs (.getParentFile f))
+     (when-let [parent (.getParentFile f)] (.mkdirs parent))
      (reset! log-file (FileWriter. f true)))))
 
 (defn log [& args]
