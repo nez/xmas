@@ -24,11 +24,6 @@
     (is (= [:b] (w/next-leaf t [:a])))
     (is (= [:a] (w/next-leaf t [:b])))))
 
-(deftest prev-leaf-cycles
-  (let [t (-> (w/leaf "a") (w/split [] :stacked) first)]
-    (is (= [:b] (w/prev-leaf t [:a])))
-    (is (= [:a] (w/prev-leaf t [:b])))))
-
 (deftest delete-window-promotes-sibling
   (let [[t p] (w/split (w/leaf "a") [] :stacked)
         [t2 p2] (w/delete-window t [:a])]

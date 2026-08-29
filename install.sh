@@ -25,10 +25,11 @@ if command -v clojure >/dev/null 2>&1; then
   echo "[ok] $(clojure --version 2>&1)"
 else
   echo "Installing Clojure CLI..."
-  curl -sL -O https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh
-  chmod +x linux-install.sh
-  sudo ./linux-install.sh
-  rm linux-install.sh
+  installer=$(mktemp)
+  trap 'rm -f "$installer"' EXIT HUP INT TERM
+  curl -fsSL https://github.com/clojure/brew-install/releases/latest/download/linux-install.sh -o "$installer"
+  chmod +x "$installer"
+  sudo "$installer"
 fi
 
 # --- clj-kondo (linter) ---
@@ -71,18 +72,9 @@ clojure -P 2>/dev/null
 # --- Create user dir ---
 mkdir -p "$HOME/.xmas"
 
-# --- Verify compilation ---
-echo "Compiling..."
-if clojure -M -e '(require (quote xmas.ed))' 2>/dev/null; then
-  echo "[ok] Compilation"
-else
-  echo "[!!] Compilation failed — check src/ for errors"
-  exit 1
-fi
-
-# --- Lint ---
-echo "Linting..."
-clj-kondo --lint src || true
+# --- Verify ---
+echo "Verifying..."
+make check
 
 echo ""
 echo "=== Ready ==="

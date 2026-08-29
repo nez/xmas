@@ -8,7 +8,7 @@ Everything is a buffer, every action is a state transition.
 
 ### [`xmas.buf`](src/xmas/buf.clj) — Buffer data type
 
-A buffer is an immutable map: `{:name :text :point :mark :file :modified :mode :undo}` — a string, a cursor position (integer offset), and metadata.
+A buffer is an immutable map containing a gap-buffer `:text`, a cursor position, and metadata.
 
 Three operations define the type:
 
@@ -23,7 +23,6 @@ Three operations define the type:
 Pure functions on strings. No editor state, no buffers — just text and positions.
 
 - [**`next-pos`**](src/xmas/text.clj#L3) / [**`prev-pos`**](src/xmas/text.clj#L9) — Step by one Unicode codepoint (handles surrogate pairs).
-- [**`line-start`**](src/xmas/text.clj#L15) / [**`line-end`**](src/xmas/text.clj#L21) — Find newline boundaries around a position.
 - [**`word-forward`**](src/xmas/text.clj#L51) / [**`word-backward`**](src/xmas/text.clj#L61) — Scan to next/previous word boundary.
 - [**`char-width`**](src/xmas/text.clj#L27) — Terminal display width of a codepoint (2 for CJK/fullwidth, 0 for combining marks, 1 otherwise).
 - [**`display-width`**](src/xmas/text.clj#L43) — Total terminal columns for a text range.
@@ -56,7 +55,7 @@ Raw terminal control without JLine. Two halves:
 
 - **Input**: [`enter-raw-mode!`](src/xmas/term.clj#L19) via `stty`, then reads bytes from `System.in`. [`read-key`](src/xmas/term.clj#L83-L96) decodes raw bytes into semantic keys — chars, `[:ctrl \f]`, `[:meta \b]`, `:up`, `:backspace`, etc. Multi-byte UTF-8 is [decoded](src/xmas/term.clj#L41-L57) into codepoints. CSI escape sequences are [parsed](src/xmas/term.clj#L60-L69) for arrow keys and special keys.
 
-- **Output**: Thin wrappers over ANSI escape codes — [`move`](src/xmas/term.clj#L106), [`cls`](src/xmas/term.clj#L108), [`clreol`](src/xmas/term.clj#L107), [`sg`](src/xmas/term.clj#L113-L115) (set graphics/colors). Everything writes to `System.out` directly.
+- **Output**: Thin wrappers over ANSI escape codes for cursor movement, clearing, and graphics/colors. Everything writes to `System.out` directly.
 
 ### [`xmas.view`](src/xmas/view.clj) — Screen rendering
 

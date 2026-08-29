@@ -18,22 +18,6 @@
     (let [bounds (rest (spec/codepoint-boundaries t))]
       (every? #(= % (text/next-pos t (text/prev-pos t %))) bounds))))
 
-(defspec line-start-valid 200
-  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)]
-    (let [bounds (butlast (spec/codepoint-boundaries t))]
-      (every? (fn [p]
-        (let [ls (text/line-start t p)]
-          (or (zero? ls) (= \newline (.charAt ^String t (dec ls))))))
-        bounds))))
-
-(defspec line-end-valid 200
-  (prop/for-all [t (gen/such-that #(pos? (count %)) spec/gen-text)]
-    (let [bounds (butlast (spec/codepoint-boundaries t))]
-      (every? (fn [p]
-        (let [le (text/line-end t p)]
-          (or (= le (count t)) (= \newline (.charAt ^String t le)))))
-        bounds))))
-
 (defspec display-width-non-negative 200
   (prop/for-all [t spec/gen-text]
     (>= (text/display-width t 0 (count t)) 0)))
@@ -77,25 +61,6 @@
 (deftest next-prev-empty
   (is (= 0 (text/next-pos "" 0)))
   (is (= 0 (text/prev-pos "" 0))))
-
-;; --- line-start / line-end ---
-
-(deftest line-start-basic
-  (is (= 0 (text/line-start "abc" 0)))
-  (is (= 0 (text/line-start "abc" 2)))
-  (is (= 4 (text/line-start "abc\ndef" 4)))
-  (is (= 4 (text/line-start "abc\ndef" 6))))
-
-(deftest line-end-basic
-  (is (= 3 (text/line-end "abc\ndef" 0)))
-  (is (= 3 (text/line-end "abc\ndef" 2)))
-  (is (= 7 (text/line-end "abc\ndef" 4))))
-
-(deftest line-start-no-newline
-  (is (= 0 (text/line-start "abc" 1))))
-
-(deftest line-end-no-newline
-  (is (= 3 (text/line-end "abc" 0))))
 
 ;; --- char-width ---
 
@@ -233,12 +198,6 @@
   ;; `start` clamped to 0 and match-at? read past the end.
   (is (nil? (text/search-backward "ab" "abcde" 2)))
   (is (nil? (text/search-backward "x" "xy" 1))))
-
-(deftest line-start-clamps-pos-past-end
-  ;; Regression: line-start with pos > length used to walk off the end and
-  ;; crash with StringIndexOutOfBoundsException.
-  (is (= 0 (text/line-start "abc" 100)))
-  (is (= 4 (text/line-start "abc\nxyz" 999))))
 
 (deftest search-backward-rejects-straddling-match
   ;; Regression: search-backward used to return a match whose end was

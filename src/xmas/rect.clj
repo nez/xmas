@@ -52,7 +52,7 @@
         (let [t (:text (cmd/cur s))
               [_ le pad] (line-bounds-at-cols t line lc rc)
               s (if (pos? pad)
-                  (cmd/edit s le le (apply str (repeat pad \space)))
+                  (cmd/edit s le le (.repeat " " pad))
                   s)
               t (:text (cmd/cur s))
               [lstart lend _] (line-bounds-at-cols t line lc rc)
@@ -70,7 +70,7 @@
               (let [[lstart lend pad] (line-bounds-at-cols t line lc rc)
                     frag (str (gap/substr t lstart lend))]
                 (if (pos? pad)
-                  (str frag (apply str (repeat pad \space)))
+                  (str frag (.repeat " " pad))
                   frag)))
             (range t-line (inc b-line))))))
 
@@ -119,7 +119,7 @@
                 ;; Ensure the line exists by appending newlines.
                 lc (gap/line-count t)
                 s (if (>= line lc)
-                    (let [pad (apply str (repeat (- (inc line) lc) \newline))]
+                    (let [pad (.repeat "\n" (- (inc line) lc))]
                       (cmd/edit s (count t) (count t) pad))
                     s)
                 t (:text (cmd/cur s))
@@ -128,8 +128,7 @@
                 line-w (text/display-width t ls le)
                 ;; Pad with spaces if the line is too short to reach start-col.
                 s (if (< line-w start-col)
-                    (cmd/edit s le le
-                              (apply str (repeat (- start-col line-w) \space)))
+                    (cmd/edit s le le (.repeat " " (- start-col line-w)))
                     s)
                 t (:text (cmd/cur s))
                 ls (gap/nth-line-start t line)

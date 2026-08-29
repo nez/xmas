@@ -11,9 +11,6 @@
       (assoc-in [:modes mode-name :type] type)
       (update-in [:modes mode-name :keymap] #(merge (or % {}) keymap))))
 
-(defn define-key [s mode-name keyseq handler]
-  (assoc-in s [:modes mode-name :keymap keyseq] handler))
-
 ;; --- Hooks ---
 
 (defn add-hook [s hook-name f]

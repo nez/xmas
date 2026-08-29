@@ -137,7 +137,6 @@
 (defn- esc [& xs] (tw (apply str E xs)))
 
 (defn move [r c] (esc (inc r) ";" (inc c) "H"))
-(defn clreol   [] (esc "K"))
 (defn cls      [] (esc "2J" E "H"))
 (defn show-cur [] (esc "?25h"))
 (defn hide-cur [] (esc "?25l"))

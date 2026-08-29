@@ -27,17 +27,24 @@
 
 (defonce editor (atom nil))
 
-(defmacro ^:private export-from [ns & syms]
-  `(do ~@(for [s syms] `(def ~s ~(symbol (name ns) (name s))))))
-
-(export-from xmas.cmd
-  cur update-cur set-point edit msg msg-error
-  beginning-of-line end-of-line
-  beginning-of-buffer end-of-buffer
-  insert-newline
-  upcase-region downcase-region capitalize-region
-  mark-whole-buffer exchange-point-and-mark
-  transpose-chars transpose-lines)
+(def cur cmd/cur)
+(def update-cur cmd/update-cur)
+(def set-point cmd/set-point)
+(def edit cmd/edit)
+(def msg cmd/msg)
+(def msg-error cmd/msg-error)
+(def beginning-of-line cmd/beginning-of-line)
+(def end-of-line cmd/end-of-line)
+(def beginning-of-buffer cmd/beginning-of-buffer)
+(def end-of-buffer cmd/end-of-buffer)
+(def insert-newline cmd/insert-newline)
+(def upcase-region cmd/upcase-region)
+(def downcase-region cmd/downcase-region)
+(def capitalize-region cmd/capitalize-region)
+(def mark-whole-buffer cmd/mark-whole-buffer)
+(def exchange-point-and-mark cmd/exchange-point-and-mark)
+(def transpose-chars cmd/transpose-chars)
+(def transpose-lines cmd/transpose-lines)
 
 (defn- line-move [dir]
   (fn [s]
@@ -1341,7 +1348,7 @@
 
 (defn- load-persisted-state!
   "Restore bookmarks, recentf, and mini-history from ~/.xmas/. Missing or
-  corrupt files are silently ignored."
+  corrupt files are logged and ignored."
   []
   (swap! editor merge
          (sanitize-persisted (persist/load! "bookmarks")

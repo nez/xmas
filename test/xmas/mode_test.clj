@@ -13,13 +13,6 @@
     (is (= :my-mode (:mode (get-in s [:bufs "t"]))))
     (is (= :foo (mode/lookup-key s [:ctrl \c])))))
 
-(deftest define-key-adds-binding
-  (let [s (-> (state)
-              (mode/register :my-mode :major)
-              (mode/set-major-mode :my-mode)
-              (mode/define-key :my-mode [:ctrl \x] :bar))]
-    (is (= :bar (mode/lookup-key s [:ctrl \x])))))
-
 (deftest minor-mode-overrides-major
   (let [s (-> (state)
               (mode/register :major :major :keymap {[:ctrl \c] :major-cmd})

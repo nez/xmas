@@ -12,27 +12,6 @@
   (if (<= p 0) 0
     (- p (Character/charCount (Character/codePointBefore t (int p))))))
 
-(defn line-start
-  "Start of line containing pos."
-  ^long [^CharSequence t ^long pos]
-  (let [n (.length t)]
-    (if (<= pos 0) 0
-      (loop [i (min (dec pos) (dec n))]
-        (cond
-          (neg? i) 0
-          (= (.charAt t (int i)) \newline) (inc i)
-          :else (recur (dec i)))))))
-
-(defn line-end
-  "End of line containing pos (position of newline, or end of text)."
-  ^long [^CharSequence t ^long pos]
-  (let [n (.length t)]
-    (loop [i pos]
-      (cond
-        (>= i n) n
-        (= (.charAt t (int i)) \newline) i
-        :else (recur (inc i))))))
-
 (defn char-width
   "Terminal display width of a Unicode codepoint."
   ^long [^long cp]

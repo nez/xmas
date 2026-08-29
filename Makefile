@@ -27,7 +27,7 @@ test:
 lint:
 	clj-kondo --lint src
 
-check: lint
+check: lint test
 	clojure -M -e '(require (quote xmas.ed)) (println "ok")'
 
 clean:

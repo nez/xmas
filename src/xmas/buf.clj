@@ -36,6 +36,19 @@
         keep (min n (max 0 from-line))]
     (if (zero? keep) [] (subvec states 0 keep))))
 
+(defn- apply-change [b from to repl]
+  (let [repl-len (count repl)
+        new-text (gap/edit (:text b) from to repl)
+        from-line (gap/line-of new-text from)]
+    (-> b
+        (assoc :text new-text :modified true)
+        (update :edit-count (fnil inc 0))
+        (update :version (fnil inc 0))
+        (update :line-states truncate-states from-line)
+        (update :overlays (fnil ov/adjust []) from to repl-len)
+        (update :point shift-pos from to repl-len)
+        (update :mark #(when % (shift-pos % from to repl-len))))))
+
 (defn edit [b from to repl]
   (let [t         (:text b)
         ;; Normalize: callers sometimes pass out-of-order or out-of-bounds
@@ -49,20 +62,10 @@
       ;; No-op: don't mark modified, don't pollute undo/redo. A zero-width
       ;; insert of "" used to clear redo and bump :modified spuriously.
       b
-      (let [old       (.toString (.subSequence ^CharSequence t (int from) (int to)))
-            new-text  (gap/edit t from to repl)
-            from-line (gap/line-of new-text from)]
-        (-> b
-            (assoc :text new-text)
-            (assoc :modified true)
-            (update :edit-count (fnil inc 0))
-            (update :version (fnil inc 0))
-            (update :line-states truncate-states from-line)
-            (update :overlays (fnil ov/adjust []) from to repl-len)
+      (let [old (.toString (.subSequence ^CharSequence t (int from) (int to)))]
+        (-> (apply-change b from to repl)
             (update :undo bounded-conj undo-limit {:from from :old old :new repl})
-            (assoc :redo [])
-            (update :point shift-pos from to repl-len)
-            (update :mark #(when % (shift-pos % from to repl-len))))))))
+            (assoc :redo []))))))
 
 (defn- replay
   "Pop the latest entry from src-key, swap its `gone` text for its `kept` text,
@@ -71,22 +74,10 @@
   (if-let [{:keys [from] :as entry} (peek (get b src-key))]
     (let [to       (+ from (count (gone-key entry)))
           kept     (kept-key entry)
-          kept-len (count kept)
-          new-text (gap/edit (:text b) from to kept)
-          from-line (gap/line-of new-text from)]
-      (-> b
-          (assoc :text new-text)
-          (assoc :modified true)
-          ;; Undo/redo mutate the buffer, so they must participate in
-          ;; auto-save threshold tracking — otherwise a long undo chain
-          ;; never gets its state backed up.
-          (update :edit-count (fnil inc 0))
-          (update :version (fnil inc 0))
-          (update :line-states truncate-states from-line)
+          kept-len (count kept)]
+      (-> (apply-change b from to kept)
           (update src-key pop)
           (update dst-key bounded-conj undo-limit entry)
-          (update :overlays (fnil ov/adjust []) from to kept-len)
-          (update :mark #(when % (shift-pos % from to kept-len)))
           (assoc :point (+ from kept-len))))
     b))
 

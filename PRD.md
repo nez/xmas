@@ -11,7 +11,7 @@ primitive instead of duplicating it. Cut implementation, never scope.
 ## Current State (v0.2)
 
 Text editor with Emacs keybindings, gap buffer with line index, elisp reader + evaluator,
-buffer/keybinding bridges, `~/.xmas/init.el` loader, `M-:` eval-expression. 356 tests.
+buffer/keybinding bridges, `~/.xmas/init.el` loader, `M-:` eval-expression, and a comprehensive test suite.
 
 ## Phase: Tier 1 Features (v0.3)
 

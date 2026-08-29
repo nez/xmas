@@ -1,8 +1,8 @@
 (ns xmas.persist
   "Read/write small EDN documents under ~/.xmas/. Used by bookmarks,
-   recentf, and mini-history. Failures are silenced — persistence is
-   convenience, not correctness, and a corrupt or missing file should
-   never prevent the editor from starting."
+   recentf, and mini-history. Failures are logged and return defaults —
+   persistence is convenience, not correctness, and a corrupt or missing
+   file should never prevent the editor from starting."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [xmas.log :as log])
@@ -38,8 +38,8 @@
   (spit (file name) (pr-str value) :encoding "UTF-8"))
 
 (defn save-quiet!
-  "Like save! but swallows IO errors (the common case for autosaving
-   convenience data on every change)."
+  "Like save! but logs and returns nil on IO errors (the common case for
+   autosaving convenience data on every change)."
   [name value]
   (try (save! name value)
        (catch Exception e

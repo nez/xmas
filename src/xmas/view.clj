@@ -342,8 +342,7 @@
         cols (max 1 (long cols))
         window-rows (dec rows)   ; reserve last row for echo area
         tree (:windows state)
-        layouts (win/layout tree window-rows cols)
-        divs (win/dividers tree window-rows cols)
+        {layouts :layout divs :dividers} (win/geometry tree window-rows cols)
         cur-path (:cur-window state)
         sig (frame-sig state layouts cur-path)]
     (if (= sig (:render-sig state))

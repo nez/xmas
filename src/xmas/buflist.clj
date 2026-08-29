@@ -27,10 +27,6 @@
    :entries      (visible-bufs bufs)
    :format-entry format-entry})
 
-(defn make-buffer
-  ([bufs] (make-buffer bufs 0))
-  ([bufs version] (listbuf/make (assoc (spec bufs) :version version))))
-
 (defn open [s]
   (-> s (listbuf/refresh buflist-name (spec (:bufs s)))
         (cmd/set-cur-buffer buflist-name)))
