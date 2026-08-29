@@ -188,8 +188,16 @@
   [forms]
   (reduce (fn [_ f] (eval f)) nil forms))
 
+(defn- el-nil? [x]
+  (or (nil? x) (false? x) (and (seq? x) (empty? x))))
+
+(defn- el-truthy? [x] (not (el-nil? x)))
+
+(defn- el-equal [a b]
+  (or (and (el-nil? a) (el-nil? b)) (= a b)))
+
 (defn- eval-if [[test then & else]]
-  (if (eval test) (eval then) (eval-body else)))
+  (if (el-truthy? (eval test)) (eval then) (eval-body else)))
 
 (defn- eval-cond [clauses]
   ;; `(cond (TEST BODY...))` — if BODY is empty and TEST is truthy, return
@@ -197,11 +205,12 @@
   ;; with `x`'s value). Previously this returned nil unconditionally.
   (reduce (fn [_ [test & body]]
             (let [tv (if (= test 't) true (eval test))]
-              (when tv
+              (when (el-truthy? tv)
                 (reduced (if (seq body) (eval-body body) tv)))))
           nil clauses))
 
 (defn- eval-setq [args]
+  (when (odd? (count args)) (err "Wrong number of arguments to setq"))
   (reduce (fn [_ [sym init]]
             (let [v (eval init)] (swap! *vars* assoc sym v) v))
           nil (partition 2 args)))
@@ -370,7 +379,7 @@
 
 (defn- eval-while [[test & body]]
   (loop []
-    (when (eval test)
+    (when (el-truthy? (eval test))
       (eval-body body)
       (recur))))
 
@@ -451,10 +460,16 @@
         (swap! *state* #(-> % (assoc :buf prev) (update :bufs dissoc name)))))))
 
 (defn- eval-and [args]
-  (reduce (fn [_ f] (or (eval f) (reduced nil))) true args))
+  (reduce (fn [_ f]
+            (let [v (eval f)]
+              (if (el-truthy? v) v (reduced nil))))
+          true args))
 
 (defn- eval-or [args]
-  (reduce (fn [_ f] (when-let [v (eval f)] (reduced v))) nil args))
+  (reduce (fn [_ f]
+            (let [v (eval f)]
+              (when (el-truthy? v) (reduced v))))
+          nil args))
 
 ;; --- Built-in functions ---
 
@@ -587,17 +602,49 @@
 
 ;; --- Key string parsing ---
 
-(def ^:private key-token-re #"\\C-(.)|\\M-(.)|\\(.)|(.)")
+(def ^:private named-keys
+  {"RET" :return "TAB" :tab "DEL" :backspace "ESC" :escape "SPC" \space
+   "<up>" :up "<down>" :down "<left>" :left "<right>" :right
+   "<home>" :home "<end>" :end "<prior>" :page-up "<next>" :page-down})
+
+(defn- key-name [token]
+  (or (get named-keys token)
+      (when (= 1 (count token)) (.charAt ^String token 0))
+      (err (str "Unknown key: " token))))
+
+(defn- parse-key-token [token]
+  (cond
+    (.startsWith ^String token "C-")
+    (let [key (key-name (subs token 2))]
+      (if (char? key) [:ctrl key] (err (str "Invalid control key: " token))))
+
+    (.startsWith ^String token "M-")
+    (let [key (key-name (subs token 2))]
+      (if (char? key) [:meta key] (err (str "Invalid meta key: " token))))
+
+    :else (key-name token)))
+
+(defn- parse-standard-token [token]
+  (if (or (.startsWith ^String token "C-")
+          (.startsWith ^String token "M-")
+          (contains? named-keys token)
+          (= 1 (count token)))
+    [(parse-key-token token)]
+    (vec token)))
+
+(def ^:private legacy-key-token-re #"\\C-(.)|\\M-(.)|\\(.)|(.)")
 
 (defn parse-key-string
-  "Parse an Emacs key string like \"\\C-x\\C-s\" into a vector of internal key representations."
+  "Parse standard Emacs key syntax such as \"C-x C-s\". The legacy
+   \"\\C-x\\C-s\" spelling remains accepted."
   [^String s]
-  (mapv (fn [[_ c m lit plain]]
-          (let [ch (.charAt ^String (or c m lit plain) 0)]
-            (cond c   [:ctrl ch]
-                  m   [:meta ch]
-                  :else ch)))
-        (re-seq key-token-re s)))
+  (if (.contains s "\\")
+    (mapv (fn [[_ c m lit plain]]
+            (let [ch (.charAt ^String (or c m lit plain) 0)]
+              (cond c [:ctrl ch], m [:meta ch], :else ch)))
+          (re-seq legacy-key-token-re s))
+    (let [s (str/trim s)]
+      (if (empty? s) [] (vec (mapcat parse-standard-token (str/split s #"\s+")))))))
 
 ;; --- Keybinding bridge ---
 
@@ -771,7 +818,7 @@
    ;; list
    'cons    cons,    'car     first,   'cdr     rest
    'list    list,    'length  count,   'nth     (fn [n l] (nth l n))
-   'null    nil?,    'append  concat
+   'null    el-nil?, 'append  (fn [& xs] (seq (apply concat xs)))
    ;; string
    'concat  str
    'substring (fn
@@ -781,7 +828,7 @@
    ;; predicates
    'numberp number?,  'stringp string?
    'listp   (fn [x] (or (nil? x) (seq? x))), 'symbolp symbol?
-   'equal   =,        'not     not
+   'equal   el-equal, 'not     (comp not el-truthy?)
    ;; buffer — read-only
    'point         #(:point (cur-buf))
    'point-min     (constantly 0)
@@ -845,14 +892,14 @@
    ;; --- list ops ---
    'funcall   (fn [f & args] (funcall-impl f args))
    'apply     (fn [f & args] (funcall-impl f (concat (butlast args) (last args))))
-   'mapcar    (fn [f l] (apply list (map #(funcall-impl f [%]) l)))
+   'mapcar    (fn [f l] (seq (mapv #(funcall-impl f [%]) l)))
    'mapc      (fn [f l] (run! #(funcall-impl f [%]) l) l)
    'reverse   reverse
    'sort      (fn [l pred] (sort #(if (funcall-impl pred [%1 %2]) -1 1) l))
-   'memq      (fn [x l] (drop-while #(not= x %) l))
+   'memq      (fn [x l] (seq (drop-while #(not= x %) l)))
    'assq      (fn [k al] (some (fn [p] (when (and (sequential? p) (= k (first p))) p)) al))
-   'nthcdr    (fn [n l] (drop n l))
-   'last      (fn [l] (let [xs (take-last 2 l)] (if (= 2 (count xs)) (cons (last xs) nil) xs)))
+   'nthcdr    (fn [n l] (seq (drop n l)))
+   'last      (fn [l] (when-let [xs (seq l)] (list (clojure.core/last xs))))
 
    ;; --- string ops ---
    'upcase     (fn [^String s] (.toUpperCase s))
@@ -910,7 +957,8 @@
    'functionp    (fn [x] (or (fn? x) (and (map? x) (contains? x :body))
                              (and (symbol? x) (contains? builtins x))
                              (and (symbol? x) (contains? @*fns* x))))
-   'keywordp     keyword?
+   'keywordp     (fn [x] (or (keyword? x)
+                              (and (symbol? x) (.startsWith (name x) ":"))))
    'vectorp      vector?})
 
 ;; --- Eval ---
@@ -951,7 +999,7 @@
     (seq? form)
     (let [[head & args] form]
       (case head
-        quote   (first args)
+        quote   (let [v (first args)] (when-not (el-nil? v) v))
         quasiquote (eval-quasi (first args) 0)
         unquote (err "unquote outside backquote")
         unquote-splicing (err "unquote-splicing outside backquote")
@@ -974,8 +1022,10 @@
         while   (eval-while args)
         and     (eval-and args)
         or      (eval-or args)
-        when    (clojure.core/when     (eval (first args)) (eval-body (rest args)))
-        unless  (clojure.core/when-not (eval (first args)) (eval-body (rest args)))
+        when    (clojure.core/when (el-truthy? (eval (first args)))
+                  (eval-body (rest args)))
+        unless  (clojure.core/when-not (el-truthy? (eval (first args)))
+                  (eval-body (rest args)))
         prog1   (let [v (eval (first args))] (eval-body (rest args)) v)
         prog2   (do (eval (first args))
                     (let [v (eval (second args))]

@@ -1286,6 +1286,15 @@
   (let [s (-> (make-state "hello world" 11) (with-mark 0))]
     (is (= "Hello World" (text (ed/capitalize-region s))))))
 
+(deftest implemented-commands-are-reachable-from-m-x
+  (let [s (-> (make-state "hello world" 11)
+              (with-mark 0)
+              (#'ed/register-builtin-commands))
+        capitalized (ed/execute-extended-command s "capitalize-region")
+        recent (ed/execute-extended-command s "recentf-open")]
+    (is (= "Hello World" (text capitalized)))
+    (is (= "Recent file: " (get-in recent [:mini :prompt])))))
+
 (deftest mark-whole-buffer-sets-region
   (let [s (ed/mark-whole-buffer (make-state "hello" 2))]
     (is (= 0 (point s)))

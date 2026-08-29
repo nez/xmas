@@ -1242,4 +1242,20 @@
 
 (deftest eval-keywordp-on-self-eval-symbol
   ;; :foo parses as a symbol that starts with ":" (self-evaluating)
-  (is (= false (ev "(keywordp ':foo)"))))
+  (is (= true (ev "(keywordp ':foo)"))))
+
+(deftest empty-list-has-elisp-nil-semantics
+  (is (= 2 (ev "(if (cdr '(a)) 1 2)")))
+  (is (true? (ev "(null '())")))
+  (is (true? (ev "(not '())")))
+  (is (true? (ev "(equal (cdr '(a)) nil)")))
+  (is (nil? (ev "(memq 'z '(a b))"))))
+
+(deftest kbd-parses-standard-and-legacy-syntax
+  (is (= [[:ctrl \x] [:ctrl \f]] (ev "(kbd \"C-x C-f\")")))
+  (is (= [[:ctrl \x] [:ctrl \f]] (el/parse-key-string "\\C-x\\C-f")))
+  (is (= [[:ctrl \space] :return :up]
+         (ev "(kbd \"C-SPC RET <up>\")"))))
+
+(deftest setq-rejects-unpaired-variable
+  (is (thrown? clojure.lang.ExceptionInfo (ev "(setq x)"))))

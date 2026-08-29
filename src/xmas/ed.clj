@@ -931,7 +931,7 @@
 
 ;; --- Named-command registry (for M-x + help) ---
 
-(declare package-list)
+(declare package-list bookmark-set bookmark-jump recentf-open)
 
 (defn- cmd-entry [f doc] {:fn f :doc doc})
 
@@ -949,6 +949,14 @@
    "scroll-down"          (cmd-entry scroll-down "Scroll forward one page.")
    "scroll-up"            (cmd-entry scroll-up "Scroll backward one page.")
    "insert-newline"       (cmd-entry insert-newline "Insert a newline at point.")
+   "upcase-region"        (cmd-entry upcase-region "Convert the region to uppercase.")
+   "downcase-region"      (cmd-entry downcase-region "Convert the region to lowercase.")
+   "capitalize-region"    (cmd-entry capitalize-region "Capitalize words in the region.")
+   "mark-whole-buffer"    (cmd-entry mark-whole-buffer "Select the whole buffer.")
+   "exchange-point-and-mark" (cmd-entry exchange-point-and-mark "Exchange point and mark.")
+   "transpose-chars"      (cmd-entry transpose-chars "Transpose characters around point.")
+   "transpose-lines"      (cmd-entry transpose-lines "Transpose this line and the previous line.")
+   "comment-region"       (cmd-entry comment-region "Comment each line in the region.")
    "delete-char"          (cmd-entry delete-char "Delete the character after point.")
    "delete-backward-char" (cmd-entry delete-backward-char "Delete the character before point.")
    "kill-line"            (cmd-entry kill-line "Kill from point to end of line.")
@@ -969,6 +977,9 @@
    "enlarge-window-horizontally" (cmd-entry enlarge-window-horizontally "Make the current window one column wider.")
    "shrink-window-horizontally"  (cmd-entry shrink-window-horizontally "Make the current window one column narrower.")
    "package-list"                (cmd-entry package-list "Show installed packages in the echo area.")
+   "bookmark-set"                (cmd-entry bookmark-set "Save point as a named bookmark.")
+   "bookmark-jump"               (cmd-entry bookmark-jump "Jump to a named bookmark.")
+   "recentf-open"                (cmd-entry recentf-open "Open a recently visited file.")
    "name-last-kbd-macro"         (cmd-entry name-last-kbd-macro-cmd "Save the last recorded macro under a name.")
    "execute-kbd-macro"           (cmd-entry execute-kbd-macro-cmd "Replay a named keyboard macro.")
    "query-replace"               (cmd-entry query-replace-cmd "Interactively replace literal matches.")
@@ -1113,11 +1124,8 @@
 (defn- recentf-completer [input s]
   (complete-prefix input (:recentf s)))
 
-(defn- recentf-open-1 [s path]
-  (find-file s path))
-
 (defn recentf-open [s]
-  (mini-start s "Recent file: " recentf-open-1 recentf-completer))
+  (mini-start s "Recent file: " find-file recentf-completer))
 
 ;; --- C-x r prefix map (registers + rectangles + bookmarks) ---
 
